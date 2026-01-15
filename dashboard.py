@@ -11,7 +11,7 @@ import random
 # ==========================================
 # 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 全方位看盤室 V8.1 (除蟲版)", layout="wide")
+st.set_page_config(page_title="AI 全方位看盤室 V8.2 (完美修復版)", layout="wide")
 
 try:
     if "GOOGLE_API_KEY" in st.secrets:
@@ -75,14 +75,19 @@ def get_stock_detail(ticker):
         return None, None
 
 def get_stock_news(ticker):
-    """取得個股最新新聞 (含防呆機制)"""
+    """取得個股最新新聞 (含過濾器)"""
     try:
         stock = yf.Ticker(ticker)
-        # 有時候 yfinance 會回傳 None 或空清單
         news = stock.news
+        
+        # 過濾器：只保留有 'title' 和 'link' 的正常新聞
+        valid_news = []
         if news:
-            return news[:3]
-        return []
+            for n in news:
+                if 'title' in n and 'link' in n and n['title']:
+                    valid_news.append(n)
+        
+        return valid_news[:3] # 只回傳前 3 則有效的
     except:
         return []
 
@@ -116,20 +121,17 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心 (強力防護版)
+# 3. AI 核心 (雙層防護)
 # ==========================================
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str):
-    # 使用最穩定的 1.5 Flash
     model_name = 'gemini-1.5-flash' 
     
-    # 這裡的 try...except 是為了防止 "ResourceExhausted" 讓 App 崩潰
-    # 無論發生什麼錯誤，這裡都會接住，回傳一個友善的字串
+    # 外層防護罩：攔截所有未知的錯誤
     try:
-        # 簡單重試 1 次
         for attempt in range(2):
             try:
-                time.sleep(1) # 緩衝
+                time.sleep(1) 
                 model = genai.GenerativeModel(model_name)
                 prompt = f"""
                 分析台股 {stock_name} ({ticker})：
@@ -138,23 +140,24 @@ def ask_ai_single(ticker, stock_name, info_str):
                 """
                 response = model.generate_content(prompt)
                 return response.text
-            except Exception as e:
-                # 這裡接住 retry 過程中的錯誤
+            except Exception:
                 time.sleep(2)
                 continue
         
-        # 如果兩次都失敗
-        return "😅 AI 伺服器忙線中 (Google API 限流)，請休息 1 分鐘後再試。"
+        return "😅 AI 伺服器忙線中 (限流)，請稍後再試。"
 
     except Exception as e:
-        # 這是最後一道防線
-        return f"🚫 系統暫時無法連線: {str(e)}"
+        return f"🚫 系統暫時無法連線"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_news(news_list):
     try:
-        # 防呆：確保 news_list 裡的每個項目都有 'title'
-        titles = [n.get('title', '無標題') for n in news_list]
+        if not news_list: return "無足夠新聞可分析"
+        
+        # 只讀取有效新聞的標題
+        titles = [n['title'] for n in news_list if 'title' in n]
+        if not titles: return "無有效標題"
+        
         titles_str = "\n".join(titles)
         
         model = genai.GenerativeModel('gemini-1.5-flash')
@@ -181,7 +184,7 @@ def ask_ai_daily(holdings_text):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 全方位看盤室 V8.1 (除蟲版)")
+st.title("📱 AI 全方位看盤室 V8.2 (完美修復版)")
 
 tab1, tab2, tab3 = st.tabs(["🔍 個股行情", "📡 鑽石掃描", "📊 我的資產"])
 
@@ -233,7 +236,7 @@ with tab1:
         fig.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # --- 新聞專區 (這裡修復了 KeyError) ---
+        # --- 新聞專區 (過濾版) ---
         st.subheader("📰 最新消息與 AI 解讀")
         news = get_stock_news(target_id)
         if news:
@@ -243,12 +246,10 @@ with tab1:
                     st.success(f"🤖 **AI 新聞短評**：{sentiment}")
             
             for n in news:
-                # 使用 .get() 來防止 'title' 不存在時報錯
-                title = n.get('title', '無標題')
-                link = n.get('link', '#')
-                st.markdown(f"- [{title}]({link})")
+                # 這裡一定有 title，因為我們在 get_stock_news 已經過濾過了
+                st.markdown(f"- [{n['title']}]({n['link']})")
         else:
-            st.caption("暫無相關新聞")
+            st.caption("暫無相關新聞 (或來源無標題)")
             
         st.divider()
 
@@ -261,7 +262,7 @@ with tab1:
             else: st.error("無 AI Key")
     else: st.warning("查無資料")
 
-# --- Tab 2: 鑽石掃描 (這裡修復了 NameError) ---
+# --- Tab 2: 鑽石掃描 (修復版) ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     if st.button("⚡ 開始掃描", type="primary"):
@@ -288,8 +289,8 @@ with tab2:
             df_res = pd.DataFrame(report).sort_values("是鑽石嗎", ascending=False)
             for _, row in df_res.iterrows():
                 with st.container():
-                    # 這裡原本有錯 (c1, c)，現在修好了
-                    c1, c2, c3 = st.columns([1.5, 2, 2]) 
+                    # 這裡就是之前報錯的地方，現在修好了
+                    c1, c2, c3 = st.columns([1.5, 2, 2])
                     title = f"💎 {row['名稱']} ({row['代號']})" if row['是鑽石嗎'] else f"{row['名稱']} ({row['代號']})"
                     c1.markdown(f"### {title}")
                     c2.info(row['標籤'])
