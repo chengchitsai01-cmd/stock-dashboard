@@ -12,7 +12,7 @@ import random
 # ==========================================
 # 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 操盤手戰情室 V8.6 (AI 解讀版)", layout="wide")
+st.set_page_config(page_title="AI 操盤手戰情室 V8.7 (自動導航版)", layout="wide")
 
 try:
     if "GOOGLE_API_KEY" in st.secrets:
@@ -139,55 +139,52 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心 (這裡做了大升級！)
+# 3. AI 核心 (自動分析版)
 # ==========================================
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str, tech_str):
-    """
-    info_str: 基本面數據 (EPS, ROE...)
-    tech_str: 技術面數據 (K值, D值, 季線位置...)
-    """
     model_name = 'gemini-1.5-flash' 
     try:
         for attempt in range(2):
             try:
                 time.sleep(1) 
                 model = genai.GenerativeModel(model_name)
-                # 提示詞升級：叫 AI 參考技術面數據
+                # 讓 AI 直接給結論
                 prompt = f"""
-                你是專業操盤手。請分析 {stock_name} ({ticker})：
-
-                【基本面數據】
-                {info_str}
-
-                【技術面數據】
+                你是技術分析師。請分析 {stock_name} ({ticker})。
+                
+                【技術數據】
                 {tech_str}
                 
-                請用繁體中文，針對「短線交易」與「長線存股」分別給出建議 (150字內)：
-                1. 技術面判讀 (現在是多頭還是空頭？KD有過熱嗎？)
-                2. 綜合操作建議 (現在適合買進嗎？)
+                【基本數據】
+                {info_str}
+                
+                請用繁體中文，像老師一樣直接告訴我 (100字內)：
+                1. 趨勢判斷 (一句話：多頭/空頭/盤整)
+                2. 操作建議 (一句話：該買/該賣/觀望?)
+                3. 原因簡述
                 """
                 response = model.generate_content(prompt)
                 return response.text
             except Exception:
                 time.sleep(2)
                 continue
-        return "😅 AI 伺服器忙線中，請稍後再試。"
+        return "😅 AI 休息中..."
     except Exception:
-        return f"🚫 系統暫時無法連線"
+        return f"🚫 無法連線"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_news(news_list):
     try:
-        if not news_list: return "無足夠新聞"
+        if not news_list: return ""
         titles = [n['title'] for n in news_list if 'title' in n]
-        if not titles: return "無有效標題"
+        if not titles: return ""
         titles_str = "\n".join(titles)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"閱讀新聞標題：{titles_str}。請用繁體中文回答：1.氣氛(偏多/偏空/中性)？ 2.一句話總結。(50字內)"
+        prompt = f"新聞標題：{titles_str}。請用繁體中文回答：1.氣氛(偏多/偏空) 2.一句話重點。"
         response = model.generate_content(prompt)
         return response.text
-    except: return "無法解讀"
+    except: return ""
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_daily(holdings_text):
@@ -201,7 +198,7 @@ def ask_ai_daily(holdings_text):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 操盤手戰情室 V8.6 (AI 解讀版)")
+st.title("📱 AI 操盤手戰情室 V8.7 (自動導航版)")
 
 tab1, tab2, tab3 = st.tabs(["🔍 個股行情", "📡 鑽石掃描", "📊 我的資產"])
 
@@ -224,14 +221,34 @@ with tab1:
         change = curr_price - prev_close
         pct_change = (change / prev_close) * 100
         
-        # 計算數據
-        hist['MA60_Line'] = hist['Close'].rolling(window=60).mean() # 計算季線
-        ma60_val = hist['MA60_Line'].iloc[-1] # 取得最新季線值
-        hist = calculate_kd(hist) # 計算 KD
-        k_val = hist['K'].iloc[-1] # 最新 K
-        d_val = hist['D'].iloc[-1] # 最新 D
+        hist['MA60_Line'] = hist['Close'].rolling(window=60).mean()
+        ma60_val = hist['MA60_Line'].iloc[-1]
+        hist = calculate_kd(hist)
+        k_val = hist['K'].iloc[-1]
+        d_val = hist['D'].iloc[-1]
         
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60_val)
+
+        # === 這裡就是 V8.7 的核心：自動 AI 分析 ===
+        if ai_available:
+            # 準備數據
+            tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
+            if curr_price > ma60_val: tech_text += "股價在季線上(強)。"
+            else: tech_text += "股價在季線下(弱)。"
+            
+            info_text = f"EPS{eps}, ROE{roe}, 殖利率{yield_val}。"
+            
+            # 使用 st.status 顯示分析過程，比較有科技感
+            with st.status("🤖 AI 正在掃描全場數據...", expanded=True) as status:
+                st.write("📈 讀取技術指標 (KD, MACD)...")
+                st.write("📊 分析基本面數據...")
+                # 自動呼叫 AI (不需要按鈕了)
+                ai_comment = ask_ai_single(target_id, target_name, info_text, tech_text)
+                status.update(label="✅ AI 分析完成！", state="complete", expanded=True)
+                
+                # 直接顯示結果
+                st.info(f"💡 **AI 操盤手觀點**：\n\n{ai_comment}")
+        # ==========================================
 
         st.markdown(f"## {target_name} ({target_id})")
         c1, c2 = st.columns([2, 3])
@@ -244,20 +261,12 @@ with tab1:
 
         st.divider()
 
-        # 這裡的教學保留著，給想學的人看
-        with st.expander("📖 圖表教學：這三張圖怎麼看？", expanded=False):
-            st.markdown("""
-            * **橘色季線**：生命線。股價在上面=強，下面=弱。
-            * **KD指標**：>80太貴(賣)，<20太便宜(買)，紅線穿過藍線=買點。
-            * **成交量**：紅柱=漲，綠柱=跌。有量才有價。
-            """)
-
         # 繪圖
         st.subheader("📈 技術分析")
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                             vertical_spacing=0.05, 
                             row_heights=[0.6, 0.2, 0.2],
-                            subplot_titles=("股價 & 季線", "KD 指標 (80過熱/20超賣)", "成交量"))
+                            subplot_titles=("股價 & 季線", "KD 指標", "成交量"))
 
         fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist.index, y=hist['MA60_Line'], mode='lines', name='季線(MA60)', line=dict(color='orange', width=2)), row=1, col=1)
@@ -288,40 +297,20 @@ with tab1:
 
         st.divider()
 
-        col_news, col_ai = st.columns([1, 1])
-        with col_news:
-            st.subheader("📰 最新消息")
-            news = get_stock_news(target_id)
-            if news:
-                if ai_available:
-                    with st.spinner("AI 解讀新聞..."):
-                        sentiment = ask_ai_news(news)
-                        st.info(f"🤖 {sentiment}")
-                for n in news:
-                    st.markdown(f"- [{n['title']}]({n['link']})")
-            else: st.caption("無新聞")
-
-        with col_ai:
-            st.subheader("🤖 AI 超級分析師")
-            if st.button(f"請 AI 解讀 {target_name} 走勢"):
-                if ai_available:
-                    with st.spinner("AI 正在看 K 線圖、算 KD 值..."):
-                        # 準備基本面數據
-                        info_text = f"股價{curr_price}, EPS{eps}, ROE{roe}, 殖利率{yield_val}"
-                        
-                        # 準備技術面數據 (這是新的！)
-                        tech_text = f"目前股價 {curr_price}, 60日季線 {ma60_val:.1f}。"
-                        if curr_price > ma60_val: tech_text += " (股價在季線之上，趨勢偏多)。"
-                        else: tech_text += " (股價在季線之下，趨勢偏弱)。"
-                        
-                        tech_text += f" K值 {k_val:.1f}, D值 {d_val:.1f}。"
-                        if k_val > 80: tech_text += " (KD過熱，小心回檔)。"
-                        elif k_val < 20: tech_text += " (KD超賣，有反彈機會)。"
-                        
-                        # 呼叫 AI
-                        res = ask_ai_single(target_id, target_name, info_text, tech_text)
-                        st.success(res)
-                else: st.error("無 AI Key")
+        # 新聞區 (這裡也自動化了)
+        st.subheader("📰 最新消息")
+        news = get_stock_news(target_id)
+        if news:
+            if ai_available:
+                # 新聞 AI 也自動跑，不需按鈕
+                sentiment = ask_ai_news(news)
+                if sentiment:
+                    st.success(f"🤖 **AI 新聞解讀**：{sentiment}")
+            
+            for n in news:
+                st.markdown(f"- [{n['title']}]({n['link']})")
+        else: st.caption("無新聞")
+        
     else: st.warning("查無資料")
 
 # --- Tab 2: 鑽石掃描 ---
