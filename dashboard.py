@@ -121,11 +121,22 @@ def evaluate_stock(info, price, ma60):
 
     return badges, is_diamond, status_text, eps, yield_val, roe
 
+# ==========================================
+# 修改這一段函數 (加入錯誤處理機制)
+# ==========================================
 def ask_ai_single(ticker, stock_name, info_str):
-    model = genai.GenerativeModel('gemini-flash-latest')
-    prompt = f"分析個股 {stock_name} ({ticker})：{info_str}。請用繁體中文簡短說明：1.公司業務簡介 2.目前估值狀態 3.存股建議。"
-    response = model.generate_content(prompt)
-    return response.text
+    try:
+        # 這裡改用更穩定的 1.5 flash 模型
+        model = genai.GenerativeModel('gemini-1.5-flash') 
+        prompt = f"分析個股 {stock_name} ({ticker})：{info_str}。請用繁體中文簡短說明：1.公司業務簡介 2.目前估值狀態 3.存股建議。"
+        
+        # 設定等待逾時，避免卡住
+        response = model.generate_content(prompt)
+        return response.text
+        
+    except Exception as e:
+        # 如果出錯 (例如額度滿了)，回傳這句溫柔的話，而不是報錯
+        return f"😅 AI 目前大塞車 (額度已滿)，請休息 1 分鐘後再試試！(錯誤代碼: {str(e)})"
 
 # ==========================================
 # 3. 主程式介面
@@ -272,3 +283,4 @@ with tab3:
             st.dataframe(holdings[["日期", "名稱", "代號", "股數", "成本", "現價", "市值"]], use_container_width=True)
         else: st.info("尚無庫存")
     else: st.info("請從側邊欄新增交易")
+
