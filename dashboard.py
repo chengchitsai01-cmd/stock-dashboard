@@ -4,7 +4,7 @@ import os
 import yfinance as yf
 import google.generativeai as genai
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots # 這是畫多圖表需要的
+from plotly.subplots import make_subplots
 from datetime import datetime
 import time
 import random
@@ -12,7 +12,7 @@ import random
 # ==========================================
 # 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 操盤手戰情室 V8.3 (旗艦版)", layout="wide")
+st.set_page_config(page_title="AI 操盤手戰情室 V8.4 (修復版)", layout="wide")
 
 try:
     if "GOOGLE_API_KEY" in st.secrets:
@@ -65,13 +65,18 @@ def get_stock_price(ticker):
     except:
         return 0.0
 
+# --- 這裡就是修復的關鍵 ---
 @st.cache_data(ttl=300)
 def get_stock_detail(ticker):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
         hist = stock.history(period="1y") 
-        return info, hist, stock # 多回傳 stock 物件以便抓股利
+        
+        # 關鍵修正：直接把數據抓出來回傳，不要回傳 stock 物件
+        dividends = stock.dividends 
+        
+        return info, hist, dividends
     except:
         return None, None, None
 
@@ -88,19 +93,15 @@ def get_stock_news(ticker):
     except:
         return []
 
-# --- 新增：KD指標計算 ---
 def calculate_kd(df, period=9):
-    # 計算 RSV
     low_min = df['Low'].rolling(window=period).min()
     high_max = df['High'].rolling(window=period).max()
-    
     df['RSV'] = 100 * (df['Close'] - low_min) / (high_max - low_min)
     df = df.dropna()
     
-    # 計算 K, D (使用平滑移動平均)
     k_list = []
     d_list = []
-    k_curr, d_curr = 50, 50 # 初始值
+    k_curr, d_curr = 50, 50 
     
     for rsv in df['RSV']:
         k_curr = (2/3) * k_curr + (1/3) * rsv
@@ -191,11 +192,11 @@ def ask_ai_daily(holdings_text):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 操盤手戰情室 V8.3 (旗艦版)")
+st.title("📱 AI 操盤手戰情室 V8.4 (修復版)")
 
 tab1, tab2, tab3 = st.tabs(["🔍 個股行情", "📡 鑽石掃描", "📊 我的資產"])
 
-# --- Tab 1: 個股行情 (大幅升級！) ---
+# --- Tab 1: 個股行情 ---
 with tab1:
     col_input, col_btn = st.columns([3, 1])
     with col_input:
@@ -206,7 +207,8 @@ with tab1:
     target_id = smart_stock_parser(q_stock)
     target_name = get_stock_name(target_id)
     
-    info, hist, stock_obj = get_stock_detail(target_id)
+    # 這裡接收 dividends (數據)，而不是 stock 物件
+    info, hist, dividends = get_stock_detail(target_id)
     
     if info and not hist.empty:
         curr_price = info.get('currentPrice', hist.iloc[-1]['Close'])
@@ -214,13 +216,11 @@ with tab1:
         change = curr_price - prev_close
         pct_change = (change / prev_close) * 100
         
-        # 1. 準備數據
         ma60 = hist['Close'].rolling(window=60).mean().iloc[-1]
-        hist = calculate_kd(hist) # 計算 KD
+        hist = calculate_kd(hist) 
         
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60)
 
-        # 2. 顯示 Header
         st.markdown(f"## {target_name} ({target_id})")
         c1, c2 = st.columns([2, 3])
         with c1:
@@ -230,41 +230,33 @@ with tab1:
             else: st.info(f"一般個股 ({' '.join(badges)})")
             st.caption(f"位置：{tech_status}")
 
-        # 3. 繪製多重圖表 (Price + KD + Volume)
+        # 繪圖
         st.subheader("📈 技術分析 (K線 + 季線 + KD + 成交量)")
-        
-        # 建立 3 個子圖表
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                             vertical_spacing=0.05, 
                             row_heights=[0.6, 0.2, 0.2],
                             subplot_titles=("股價 & 季線", "KD 指標", "成交量"))
 
-        # Row 1: K 線圖 + MA60
         hist['MA60_Line'] = hist['Close'].rolling(window=60).mean()
         fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
         fig.add_trace(go.Scatter(x=hist.index, y=hist['MA60_Line'], mode='lines', name='季線(MA60)', line=dict(color='orange', width=2)), row=1, col=1)
 
-        # Row 2: KD 指標
         fig.add_trace(go.Scatter(x=hist.index, y=hist['K'], mode='lines', name='K值', line=dict(color='red', width=1.5)), row=2, col=1)
         fig.add_trace(go.Scatter(x=hist.index, y=hist['D'], mode='lines', name='D值', line=dict(color='blue', width=1.5)), row=2, col=1)
-        # 畫 20/80 參考線
         fig.add_hline(y=80, line_dash="dash", line_color="gray", row=2, col=1)
         fig.add_hline(y=20, line_dash="dash", line_color="gray", row=2, col=1)
 
-        # Row 3: 成交量
         colors = ['red' if row['Open'] - row['Close'] >= 0 else 'green' for index, row in hist.iterrows()]
         fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], name='成交量', marker_color=colors), row=3, col=1)
 
         fig.update_layout(xaxis_rangeslider_visible=False, height=800, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # 4. 歷年股利圖表
+        # 歷年股利 (使用前面抽出來的 dividends 數據)
         st.subheader("💰 歷年股利發放紀錄")
         try:
-            divs = stock_obj.dividends
-            if not divs.empty:
-                # 只取最近 10 次
-                last_divs = divs.tail(10)
+            if dividends is not None and not dividends.empty:
+                last_divs = dividends.tail(10)
                 div_fig = go.Figure(data=[go.Bar(x=last_divs.index, y=last_divs.values, marker_color='gold')])
                 div_fig.update_layout(title="近年配息金額", yaxis_title="元", height=300)
                 st.plotly_chart(div_fig, use_container_width=True)
@@ -275,9 +267,7 @@ with tab1:
 
         st.divider()
 
-        # 5. 新聞與 AI
         col_news, col_ai = st.columns([1, 1])
-        
         with col_news:
             st.subheader("📰 最新消息")
             news = get_stock_news(target_id)
