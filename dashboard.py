@@ -200,8 +200,19 @@ if not df.empty:
         with c2:
             st.subheader("損益詳細計算")
             # 這裡顯示計算過的結果 (唯讀)
+            # 這裡顯示計算過的結果 (唯讀)
             display_cols = holdings[["代號", "股數", "成本", "目前市價", "帳面損益"]]
-            st.dataframe(display_cols.style.format("{:,.0f}"), use_container_width=True)
+            
+            # 修正：針對不同欄位設定不同的格式，避免把「代號」當成數字處理而報錯
+            st.dataframe(
+                display_cols.style.format({
+                    "股數": "{:,.0f}",      # 整數，加逗號
+                    "成本": "{:,.1f}",      # 小數點 1 位
+                    "目前市價": "{:,.1f}",  # 小數點 1 位
+                    "帳面損益": "{:,.0f}"    # 整數，加逗號 (比較清爽)
+                }),
+                use_container_width=True
+            )
 
         # 4. AI & K線圖
         st.divider()
@@ -231,3 +242,4 @@ if not df.empty:
                     st.plotly_chart(fig, use_container_width=True)
 else:
     st.info("👈 請從左側輸入代號 (例如: 2330 或 台積電) 開始使用！")
+
