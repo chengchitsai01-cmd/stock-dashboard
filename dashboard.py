@@ -3,13 +3,12 @@ import pandas as pd
 import os
 import yfinance as yf
 import google.generativeai as genai
-import plotly.graph_objects as go
 from datetime import datetime
 
 # ==========================================
 # 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 每日獵人戰情室 V7.1", layout="wide")
+st.set_page_config(page_title="AI 鑽石獵人戰情室 V7.2", layout="wide")
 
 try:
     if "GOOGLE_API_KEY" in st.secrets:
@@ -29,14 +28,14 @@ DATA_FILE = "trade_history.csv"
 STOCK_MAP = {
     "台積電": "2330.TW", "鴻海": "2317.TW", "聯發科": "2454.TW", "中華電": "2412.TW",
     "富邦金": "2881.TW", "國泰金": "2882.TW", "中信金": "2891.TW", "玉山金": "2884.TW",
-    "0050": "0050.TW", "台灣50": "0050.TW", 
-    "0056": "0056.TW", "高股息": "0056.TW",
-    "00878": "00878.TW", "國泰永續": "00878.TW",
-    "00929": "00929.TW", "006208": "006208.TW"
+    "元大金": "2885.TW", "兆豐金": "2886.TW", "中鋼": "2002.TW",
+    "長榮": "2603.TW", "陽明": "2609.TW", "萬海": "2615.TW",
+    "緯創": "3231.TW", "廣達": "2382.TW", "技嘉": "2376.TW",
+    "0050": "0050.TW", "0056": "0056.TW", "00878": "00878.TW", "00929": "00929.TW"
 }
 
-# 預設觀察清單 (你可以隨時回來改這裡)
-WATCHLIST = ["2330.TW", "00878.TW", "2881.TW", "2412.TW", "2317.TW"]
+# 預設觀察清單
+WATCHLIST = ["2330.TW", "2317.TW", "2454.TW", "2603.TW", "2891.TW", "2382.TW"]
 
 def smart_stock_parser(user_input):
     user_input = user_input.strip()
@@ -55,100 +54,130 @@ def get_stock_price(ticker):
         return 0.0
 
 @st.cache_data(ttl=300)
-def get_stock_details(ticker):
+def get_stock_info(ticker):
+    """取得詳細基本面資料"""
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info
-        hist = stock.history(period="1y") 
-        return info, hist
+        return stock.info
     except:
-        return None, None
+        return {}
 
-# --- 核心：獵人策略 (Hunter Strategy) ---
-def run_hunter_check(ticker_list):
+# --- 核心：鑽石獵人策略 (Fundamental + Technical) ---
+def run_diamond_hunter(ticker_list, strict_mode=False):
     report = []
     
     for ticker in ticker_list:
         try:
             stock = yf.Ticker(ticker)
+            
+            # 1. 技術面：抓歷史股價算均線
             df = stock.history(period="1y") 
             if len(df) < 60: continue 
 
-            # 設定目標價：季線 (MA60) 為「合理便宜價」
-            df['MA60'] = df['Close'].rolling(window=60).mean()
-            
+            df['MA60'] = df['Close'].rolling(window=60).mean() # 季線
             last = df.iloc[-1]
             price = last['Close']
             target_price = last['MA60']
             
-            # 計算距離
-            # 負數代表還沒跌到 (還差幾%)
-            # 正數代表已經跌破 (便宜了幾%)
+            # 便宜度 (負數代表還沒跌到，正數代表便宜了幾%)
             gap_percent = (target_price - price) / target_price * 100
             
-            # 訊號邏輯
-            signal = "⏳ 等待中"
-            color = "gray"
-            status_text = f"還差 {abs(gap_percent):.1f}%"
+            # 2. 基本面：抓你的 3 大條件
+            # 注意：免費 API 資料可能不全，我們做防呆處理
+            info = stock.info
             
-            if gap_percent > 0: # 價格 < 目標價 (跌破季線)
-                signal = "🎯 射擊 (買進)"
-                color = "red" # 紅色代表機會
-                status_text = f"已便宜 {gap_percent:.1f}%！"
+            # 條件 A: EPS > 1
+            eps = info.get('trailingEps', 0)
+            if eps is None: eps = 0
+            
+            # 條件 B: 殖利率 > 5% (0.05)
+            yield_val = info.get('dividendYield', 0)
+            if yield_val is None: yield_val = 0
+            
+            # 條件 C: ROE > 15% (0.15)
+            roe = info.get('returnOnEquity', 0)
+            if roe is None: roe = 0
+
+            # === 評分機制 ===
+            # 基本面標籤
+            badges = []
+            fundamental_score = 0
+            
+            if eps > 1:
+                badges.append("💰EPS優")
+                fundamental_score += 1
+            if yield_val > 0.05:
+                badges.append("🥥高股息")
+                fundamental_score += 1
+            if roe > 0.15:
+                badges.append("🚀高ROE")
+                fundamental_score += 1
                 
-                # 如果便宜超過 10% (跌很深)
-                if gap_percent > 10:
-                    signal = "🔥 黃金機會 (大買)"
-                    status_text = f"嚴重超跌 {gap_percent:.1f}%"
+            # 如果開啟「嚴格模式」，只要有一個基本面不合格就跳過
+            if strict_mode and fundamental_score < 3:
+                continue
+
+            # 3. 綜合訊號判斷
+            signal = "⏳ 觀察中"
+            color = "gray"
             
-            elif gap_percent < -10: # 價格 > 目標價 10% (漲太多)
-                signal = "✋ 太貴了"
-                color = "green" # 台股綠色是跌，但在這裡用綠色表示「冷靜/安全/持有」
-                status_text = f"比合理價貴 {abs(gap_percent):.1f}%"
+            # 只有當「基本面不錯 (至少 2 分)」且「股價便宜 (跌破季線)」才亮燈
+            if fundamental_score >= 2:
+                if gap_percent > 0:
+                    signal = "💎 鑽石買點"
+                    color = "red" # 雙強：好公司 + 便宜
+                elif gap_percent > -5:
+                    signal = "👀 準備出手"
+                    color = "orange" # 價格快到了
+            
+            # 顯示用的數據字串
+            fund_info = f"EPS: {eps:.2f} | 殖利率: {yield_val*100:.1f}% | ROE: {roe*100:.1f}%"
 
             report.append({
                 "代號": ticker,
                 "現價": price,
                 "目標價(MA60)": target_price,
+                "距離%": gap_percent,
+                "基本面標籤": " ".join(badges),
+                "基本面數據": fund_info,
+                "分數": fundamental_score,
                 "訊號": signal,
-                "狀態": status_text,
-                "距離%": gap_percent, # 用來排序
                 "color": color
             })
 
         except Exception as e:
             continue
             
-    # 排序：把最便宜 (gap_percent 最大) 的排最上面，讓你一眼看到機會
-    return pd.DataFrame(report).sort_values("距離%", ascending=False)
+    # 排序：先看「分數(好公司)」，再看「距離%(便宜度)」
+    if not report: return pd.DataFrame()
+    return pd.DataFrame(report).sort_values(["分數", "距離%"], ascending=[False, False])
 
 def ask_ai_daily(holdings_text):
     model = genai.GenerativeModel('gemini-flash-latest')
-    prompt = f"""
-    你是用戶的每日投資助理。這是用戶目前的庫存：
-    {holdings_text}
-    請用非常簡短、口語化的繁體中文 (像是朋友傳 LINE) 告訴用戶：
-    1. 今天有沒有哪支股票跌很多，適合加碼？
-    2. 整體資產還好嗎？需要擔心嗎？
-    (字數 100 字以內，不要廢話)
-    """
+    prompt = f"你是投資助理。用戶庫存：{holdings_text}。請簡短回報(100字內)：1.今日加碼機會 2.風險提醒。"
     response = model.generate_content(prompt)
     return response.text
 
 # ==========================================
 # 3. 主程式介面
 # ==========================================
-st.title("🏹 AI 每日獵人戰情室 V7.1")
+st.title("💎 AI 鑽石獵人戰情室 V7.2")
 
 # 分頁
-tab1, tab2 = st.tabs(["📡 每日獵場 (Radar)", "📊 我的戰利品 (Portfolio)"])
+tab1, tab2 = st.tabs(["📡 鑽石獵場 (Screener)", "📊 我的金庫 (Portfolio)"])
 
-# --- Tab 1: 每日獵場 (這頁放最前面，因為你每天只想看這個) ---
+# --- Tab 1: 鑽石獵場 ---
 with tab1:
-    st.subheader("🧐 今天有便宜貨嗎？")
-    st.caption("獵人策略：股價跌破季線 (MA60) 才是出手機會。排序越上面越便宜。")
+    st.subheader("🧐 尋找「好公司 + 便宜價」")
+    st.caption("策略：篩選 EPS>1、殖利率>5%、ROE>15% 的優質股，並在跌破季線時通知。")
     
-    if st.button("⚡ 掃描獵物", type="primary"):
+    col_scan, col_check = st.columns([1, 2])
+    with col_scan:
+        scan_btn = st.button("⚡ 全市場掃描", type="primary")
+    with col_check:
+        strict = st.checkbox("開啟嚴格模式 (只顯示 3 項全過的公司)", value=False)
+    
+    if scan_btn:
         # 掃描庫存 + 觀察名單
         scan_list = set(WATCHLIST)
         if os.path.exists(DATA_FILE):
@@ -157,35 +186,38 @@ with tab1:
                 scan_list.update(current_df["代號"].unique().tolist())
             except: pass
             
-        with st.spinner("正在測量距離..."):
-            result_df = run_hunter_check(list(scan_list))
+        with st.spinner("正在進行財報與技術面分析..."):
+            result_df = run_diamond_hunter(list(scan_list), strict_mode=strict)
             
         if not result_df.empty:
             for index, row in result_df.iterrows():
-                # 使用簡單的卡片式佈局
                 with st.container():
-                    c1, c2, c3, c4 = st.columns([1.5, 1.5, 2, 2])
+                    c1, c2, c3 = st.columns([1.5, 3, 2])
                     
-                    # 1. 代號
+                    # 1. 代號與價格
                     c1.markdown(f"### {row['代號']}")
+                    c1.caption(f"現價: {row['現價']:.1f}")
                     
-                    # 2. 現價 vs 目標
-                    c2.metric("現價", f"{row['現價']:.1f}", 
-                              f"目標: {row['目標價(MA60)']:.1f}", 
-                              delta_color="off") # 這裡不顯示顏色，只看數字
+                    # 2. 基本面數據 (重點！)
+                    c2.markdown(f"**{row['基本面標籤']}**")
+                    c2.text(f"{row['基本面數據']}")
                     
-                    # 3. 訊號 (大字體)
-                    color_style = f"color: {row['color']}; font-weight: bold; font-size: 20px;"
-                    c3.markdown(f"<span style='{color_style}'>{row['訊號']}</span>", unsafe_allow_html=True)
-                    
-                    # 4. 狀態描述 (進度條概念)
-                    c4.info(f"{row['狀態']}")
+                    # 3. 買賣訊號
+                    # 如果是鑽石買點，字體放大變色
+                    color_style = f"color: {row['color']}; font-weight: bold;"
+                    if "鑽石" in row['訊號']:
+                        c3.markdown(f"### <span style='{color_style}'>{row['訊號']}</span>", unsafe_allow_html=True)
+                        c3.caption(f"已便宜 {row['距離%']:.1f}%")
+                    else:
+                        c3.markdown(f"<span style='{color_style}'>{row['訊號']}</span>", unsafe_allow_html=True)
+                        if row['距離%'] < 0:
+                            c3.caption(f"還差 {abs(row['距離%']):.1f}%")
                     
                     st.divider()
         else:
-            st.warning("暫無數據，請確認網路連線。")
+            st.warning("沒有符合條件的股票 (如果是嚴格模式，試著關掉它看看)")
 
-# --- Tab 2: 我的戰利品 (庫存) ---
+# --- Tab 2: 我的金庫 ---
 with tab2:
     with st.sidebar:
         st.header("📝 交易登記")
