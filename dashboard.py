@@ -95,7 +95,14 @@ with st.sidebar:
             df.to_csv(DATA_FILE, index=False)
             st.success("已儲存！")
             st.rerun()
+# ... (接在原本送出按鈕的程式碼後面)
 
+    st.markdown("---") # 分隔線
+    if st.button("🗑️ 清空所有紀錄 (重來)"):
+        if os.path.exists(DATA_FILE):
+            os.remove(DATA_FILE) # 刪除 CSV 檔案
+            st.success("紀錄已清空！")
+            st.rerun() # 重新整理頁面
 # --- 主畫面邏輯 ---
 if not df.empty:
     # 1. 計算庫存數據
@@ -165,3 +172,4 @@ if not df.empty:
 
 else:
     st.info("👈 請從左側新增第一筆交易，開始你的投資旅程！")
+
