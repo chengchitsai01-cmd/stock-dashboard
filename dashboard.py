@@ -12,7 +12,7 @@ import random
 # ==========================================
 # 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 操盤手戰情室 V8.7 (自動導航版)", layout="wide")
+st.set_page_config(page_title="AI 操盤手戰情室 V8.8 (每日待辦版)", layout="wide")
 
 try:
     if "GOOGLE_API_KEY" in st.secrets:
@@ -139,7 +139,7 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心 (自動分析版)
+# 3. AI 核心
 # ==========================================
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str, tech_str):
@@ -149,19 +149,13 @@ def ask_ai_single(ticker, stock_name, info_str, tech_str):
             try:
                 time.sleep(1) 
                 model = genai.GenerativeModel(model_name)
-                # 讓 AI 直接給結論
                 prompt = f"""
                 你是技術分析師。請分析 {stock_name} ({ticker})。
-                
-                【技術數據】
-                {tech_str}
-                
-                【基本數據】
-                {info_str}
-                
+                【技術】{tech_str}
+                【基本】{info_str}
                 請用繁體中文，像老師一樣直接告訴我 (100字內)：
-                1. 趨勢判斷 (一句話：多頭/空頭/盤整)
-                2. 操作建議 (一句話：該買/該賣/觀望?)
+                1. 趨勢判斷 (多頭/空頭/盤整)
+                2. 操作建議 (該買/該賣/觀望?)
                 3. 原因簡述
                 """
                 response = model.generate_content(prompt)
@@ -186,19 +180,34 @@ def ask_ai_news(news_list):
         return response.text
     except: return ""
 
+# --- V8.8 新增：每日待辦事項 AI ---
 @st.cache_data(ttl=3600, show_spinner=False)
-def ask_ai_daily(holdings_text):
+def ask_ai_todo_list(portfolio_status_str):
+    """
+    portfolio_status_str 包含了所有庫存的：成本、現價、KD值、季線位置
+    """
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"用戶庫存：{holdings_text}。請給 100 字內的繁體中文總評：加碼機會與風險提示。"
+        prompt = f"""
+        你是一位嚴格的基金經理人。這是用戶目前的投資組合狀態：
+        
+        {portfolio_status_str}
+        
+        請根據「成本」與「現在技術面(KD/季線)」，給出一份【今日操作待辦清單】。
+        請用條列式，每一行格式如下：
+        - [動作] 股票名稱：簡短理由 (例如：[減碼] 台積電：獲利已高且KD過熱)
+        
+        動作選項：[續抱]、[加碼]、[減碼]、[出清]、[觀望]。
+        請嚴格一點，不要模稜兩可。
+        """
         response = model.generate_content(prompt)
         return response.text
-    except: return "😅 AI 休息中。"
+    except: return "😅 AI 正在重新整理思緒..."
 
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 操盤手戰情室 V8.7 (自動導航版)")
+st.title("📱 AI 操盤手戰情室 V8.8 (每日待辦版)")
 
 tab1, tab2, tab3 = st.tabs(["🔍 個股行情", "📡 鑽石掃描", "📊 我的資產"])
 
@@ -229,26 +238,18 @@ with tab1:
         
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60_val)
 
-        # === 這裡就是 V8.7 的核心：自動 AI 分析 ===
+        # 自動 AI 分析
         if ai_available:
-            # 準備數據
             tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
             if curr_price > ma60_val: tech_text += "股價在季線上(強)。"
             else: tech_text += "股價在季線下(弱)。"
-            
             info_text = f"EPS{eps}, ROE{roe}, 殖利率{yield_val}。"
             
-            # 使用 st.status 顯示分析過程，比較有科技感
             with st.status("🤖 AI 正在掃描全場數據...", expanded=True) as status:
-                st.write("📈 讀取技術指標 (KD, MACD)...")
-                st.write("📊 分析基本面數據...")
-                # 自動呼叫 AI (不需要按鈕了)
+                st.write("📈 讀取技術指標...")
                 ai_comment = ask_ai_single(target_id, target_name, info_text, tech_text)
-                status.update(label="✅ AI 分析完成！", state="complete", expanded=True)
-                
-                # 直接顯示結果
-                st.info(f"💡 **AI 操盤手觀點**：\n\n{ai_comment}")
-        # ==========================================
+                status.update(label="✅ 分析完成", state="complete", expanded=True)
+                st.info(f"💡 **AI 觀點**：\n\n{ai_comment}")
 
         st.markdown(f"## {target_name} ({target_id})")
         c1, c2 = st.columns([2, 3])
@@ -261,7 +262,6 @@ with tab1:
 
         st.divider()
 
-        # 繪圖
         st.subheader("📈 技術分析")
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
                             vertical_spacing=0.05, 
@@ -282,31 +282,12 @@ with tab1:
         fig.update_layout(xaxis_rangeslider_visible=False, height=800, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # 歷年股利
-        st.subheader("💰 歷年股利發放紀錄")
-        try:
-            if dividends is not None and not dividends.empty:
-                last_divs = dividends.tail(10)
-                div_fig = go.Figure(data=[go.Bar(x=last_divs.index, y=last_divs.values, marker_color='gold')])
-                div_fig.update_layout(title="近年配息金額 (單位: 元)", yaxis_title="元", height=300)
-                st.plotly_chart(div_fig, use_container_width=True)
-            else:
-                st.info("查無配息紀錄")
-        except:
-            st.info("無法取得股利資料")
-
-        st.divider()
-
-        # 新聞區 (這裡也自動化了)
         st.subheader("📰 最新消息")
         news = get_stock_news(target_id)
         if news:
             if ai_available:
-                # 新聞 AI 也自動跑，不需按鈕
                 sentiment = ask_ai_news(news)
-                if sentiment:
-                    st.success(f"🤖 **AI 新聞解讀**：{sentiment}")
-            
+                if sentiment: st.success(f"🤖 **新聞解讀**：{sentiment}")
             for n in news:
                 st.markdown(f"- [{n['title']}]({n['link']})")
         else: st.caption("無新聞")
@@ -348,30 +329,32 @@ with tab2:
                     st.divider()
         else: st.info("無符合結果")
 
-# --- Tab 3: 我的資產 ---
+# --- Tab 3: 我的資產 (新增：每日待辦清單) ---
 with tab3:
     with st.sidebar:
-        st.header("📝 交易登記 (模擬)")
+        st.header("📝 交易登記")
         with st.form("trade_form"):
-            t_input = st.text_input("代號 (如 2330)", "2330")
+            t_input = st.text_input("代號", "2330")
             act = st.selectbox("動作", ["🔴 買進", "🟢 賣出"])
             t_id = smart_stock_parser(t_input)
             cur_p = get_stock_price(t_id)
             pr = st.number_input("價格", min_value=0.0, value=float(cur_p) if cur_p>0 else 0.0)
             sh = st.number_input("股數", min_value=1, value=1000, step=100)
-            
             if st.form_submit_button("送出交易"):
                 if os.path.exists(DATA_FILE): df = pd.read_csv(DATA_FILE)
                 else: df = pd.DataFrame(columns=["日期", "代號", "動作", "成本", "股數"])
                 new = pd.DataFrame({"日期":[datetime.now().strftime("%Y-%m-%d")],"代號":[t_id],"動作":[act],"成本":[pr],"股數":[sh]})
                 pd.concat([new, df]).to_csv(DATA_FILE, index=False)
-                st.success(f"已記錄：{act} {t_id}")
+                st.success("已記錄")
                 st.rerun()
 
     if os.path.exists(DATA_FILE):
         df = pd.read_csv(DATA_FILE)
         holdings = df[df["動作"].str.contains("買")].copy()
+        
         if not holdings.empty:
+            # 1. 顯示資產總覽
+            st.subheader("💰 資產總覽")
             holdings.insert(1, "名稱", holdings["代號"].apply(get_stock_name))
             holdings["現價"] = holdings["代號"].apply(get_stock_price)
             holdings["市值"] = holdings["現價"] * holdings["股數"]
@@ -383,11 +366,38 @@ with tab3:
             c2.metric("總損益", f"${profit:,.0f}")
             st.dataframe(holdings[["日期", "名稱", "代號", "股數", "成本", "現價", "市值"]], use_container_width=True)
             
-            if st.button("🤖 庫存健檢 (AI 分析)"):
+            st.divider()
+            
+            # 2. 新增功能：每日操作待辦清單
+            st.subheader("📅 今日 AI 操盤待辦")
+            st.caption("AI 會根據你的「成本」與「目前技術指標」，給你具體建議。")
+            
+            if st.button("🚀 生成今日操作清單", type="primary"):
                 if ai_available:
-                     with st.spinner("AI 檢視中..."):
-                        res = ask_ai_daily(holdings[["名稱", "股數", "成本", "現價"]].to_string())
-                        st.info(res)
+                    with st.spinner("AI 正在逐一檢視你的庫存 (計算 KD、均線乖離)..."):
+                        portfolio_status = ""
+                        # 逐一檢查庫存股票
+                        for idx, row in holdings.iterrows():
+                            t_id = row['代號']
+                            t_name = row['名稱']
+                            cost = row['成本']
+                            
+                            # 抓即時技術面
+                            _, hist, _ = get_stock_detail(t_id)
+                            if not hist.empty:
+                                current_p = hist.iloc[-1]['Close']
+                                ma60 = hist['Close'].rolling(window=60).mean().iloc[-1]
+                                hist = calculate_kd(hist)
+                                k_now = hist['K'].iloc[-1]
+                                
+                                # 整理成字串給 AI
+                                status = f"- {t_name}: 成本{cost}, 現價{current_p:.1f}, 季線{ma60:.1f}, KD值{k_now:.1f}\n"
+                                portfolio_status += status
+                        
+                        # 呼叫 AI
+                        todo_list = ask_ai_todo_list(portfolio_status)
+                        st.success(todo_list)
                 else: st.error("無 AI Key")
+
         else: st.info("尚無庫存")
     else: st.info("無交易紀錄")
