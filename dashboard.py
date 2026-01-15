@@ -11,7 +11,7 @@ import random
 # ==========================================
 # 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 全方位看盤室 V7.9 (經典穩定版)", layout="wide")
+st.set_page_config(page_title="AI 全方位看盤室 V8.0 (新聞哨兵版)", layout="wide")
 
 try:
     if "GOOGLE_API_KEY" in st.secrets:
@@ -74,6 +74,14 @@ def get_stock_detail(ticker):
     except:
         return None, None
 
+def get_stock_news(ticker):
+    """取得個股最新新聞"""
+    try:
+        stock = yf.Ticker(ticker)
+        return stock.news[:3] # 只抓最新的 3 則
+    except:
+        return []
+
 def evaluate_stock(info, price, ma60):
     badges = []
     score = 0
@@ -104,19 +112,15 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心：回歸經典版 (1.5 Flash)
+# 3. AI 核心
 # ==========================================
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str):
-    # 這就是目前最穩定的版本 (通常大家說的 latest 就是指這個)
     model_name = 'gemini-1.5-flash' 
-    
-    # 簡單的重試機制 (最多 2 次，避免一直轉圈)
     for attempt in range(2):
         try:
-            time.sleep(1) # 稍微休息一下再發請求
+            time.sleep(1)
             model = genai.GenerativeModel(model_name)
-            
             prompt = f"""
             分析台股 {stock_name} ({ticker})：
             數據：{info_str}
@@ -125,10 +129,32 @@ def ask_ai_single(ticker, stock_name, info_str):
             response = model.generate_content(prompt)
             return response.text
         except:
-            time.sleep(2) # 失敗了睡 2 秒重試
+            time.sleep(2)
             continue
-            
     return "😅 AI 伺服器忙線中，請稍後再按一次。"
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def ask_ai_news(news_list):
+    """專門用來解讀新聞的 AI"""
+    try:
+        # 整理新聞標題給 AI
+        titles = [n.get('title', '') for n in news_list]
+        titles_str = "\n".join(titles)
+        
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"""
+        請閱讀以下關於某檔股票的新聞標題：
+        {titles_str}
+        
+        請用繁體中文回答：
+        1. 整體氣氛是「偏多」、「偏空」還是「中性」？
+        2. 用一句話總結這些新聞的重點。
+        (不需要長篇大論，50字內)
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except:
+        return "無法解讀新聞"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_daily(holdings_text):
@@ -143,11 +169,11 @@ def ask_ai_daily(holdings_text):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 全方位看盤室 V7.9 (經典版)")
+st.title("📱 AI 全方位看盤室 V8.0 (新聞哨兵版)")
 
 tab1, tab2, tab3 = st.tabs(["🔍 個股行情", "📡 鑽石掃描", "📊 我的資產"])
 
-# --- Tab 1: 個股行情 ---
+# --- Tab 1: 個股行情 (新增新聞功能) ---
 with tab1:
     col_input, col_btn = st.columns([3, 1])
     with col_input:
@@ -195,7 +221,25 @@ with tab1:
         fig.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        if st.button(f"🤖 呼叫 AI 分析 {target_name}"):
+        # --- 新增：新聞專區 ---
+        st.subheader("📰 最新消息與 AI 解讀")
+        news = get_stock_news(target_id)
+        if news:
+            # 呼叫 AI 解讀新聞
+            if ai_available:
+                with st.spinner("AI 正在閱讀新聞..."):
+                    sentiment = ask_ai_news(news)
+                    st.success(f"🤖 **AI 新聞短評**：{sentiment}")
+            
+            # 列出新聞連結
+            for n in news:
+                st.markdown(f"- [{n['title']}]({n['link']})")
+        else:
+            st.caption("暫無相關新聞")
+            
+        st.divider()
+
+        if st.button(f"🤖 呼叫 AI 分析基本面 {target_name}"):
             if ai_available:
                 with st.spinner("AI 分析中..."):
                     info_text = f"價{curr_price}, EPS{eps}, ROE{roe}, 殖利率{yield_val}"
