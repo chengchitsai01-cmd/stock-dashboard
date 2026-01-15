@@ -4,6 +4,7 @@ import os
 import yfinance as yf
 import google.generativeai as genai
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots # 這是畫多圖表需要的
 from datetime import datetime
 import time
 import random
@@ -11,7 +12,7 @@ import random
 # ==========================================
 # 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 全方位看盤室 V8.2 (完美修復版)", layout="wide")
+st.set_page_config(page_title="AI 操盤手戰情室 V8.3 (旗艦版)", layout="wide")
 
 try:
     if "GOOGLE_API_KEY" in st.secrets:
@@ -70,26 +71,46 @@ def get_stock_detail(ticker):
         stock = yf.Ticker(ticker)
         info = stock.info
         hist = stock.history(period="1y") 
-        return info, hist
+        return info, hist, stock # 多回傳 stock 物件以便抓股利
     except:
-        return None, None
+        return None, None, None
 
 def get_stock_news(ticker):
-    """取得個股最新新聞 (含過濾器)"""
     try:
         stock = yf.Ticker(ticker)
         news = stock.news
-        
-        # 過濾器：只保留有 'title' 和 'link' 的正常新聞
         valid_news = []
         if news:
             for n in news:
                 if 'title' in n and 'link' in n and n['title']:
                     valid_news.append(n)
-        
-        return valid_news[:3] # 只回傳前 3 則有效的
+        return valid_news[:3]
     except:
         return []
+
+# --- 新增：KD指標計算 ---
+def calculate_kd(df, period=9):
+    # 計算 RSV
+    low_min = df['Low'].rolling(window=period).min()
+    high_max = df['High'].rolling(window=period).max()
+    
+    df['RSV'] = 100 * (df['Close'] - low_min) / (high_max - low_min)
+    df = df.dropna()
+    
+    # 計算 K, D (使用平滑移動平均)
+    k_list = []
+    d_list = []
+    k_curr, d_curr = 50, 50 # 初始值
+    
+    for rsv in df['RSV']:
+        k_curr = (2/3) * k_curr + (1/3) * rsv
+        d_curr = (2/3) * d_curr + (1/3) * k_curr
+        k_list.append(k_curr)
+        d_list.append(d_curr)
+        
+    df['K'] = k_list
+    df['D'] = d_list
+    return df
 
 def evaluate_stock(info, price, ma60):
     badges = []
@@ -121,13 +142,11 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心 (雙層防護)
+# 3. AI 核心
 # ==========================================
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str):
     model_name = 'gemini-1.5-flash' 
-    
-    # 外層防護罩：攔截所有未知的錯誤
     try:
         for attempt in range(2):
             try:
@@ -143,33 +162,22 @@ def ask_ai_single(ticker, stock_name, info_str):
             except Exception:
                 time.sleep(2)
                 continue
-        
-        return "😅 AI 伺服器忙線中 (限流)，請稍後再試。"
-
-    except Exception as e:
+        return "😅 AI 伺服器忙線中，請稍後再試。"
+    except Exception:
         return f"🚫 系統暫時無法連線"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_news(news_list):
     try:
-        if not news_list: return "無足夠新聞可分析"
-        
-        # 只讀取有效新聞的標題
+        if not news_list: return "無足夠新聞"
         titles = [n['title'] for n in news_list if 'title' in n]
         if not titles: return "無有效標題"
-        
         titles_str = "\n".join(titles)
-        
         model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"""
-        請閱讀以下新聞標題：
-        {titles_str}
-        請用繁體中文回答：1.整體氣氛(偏多/偏空/中性)？ 2.一句話總結重點。(50字內)
-        """
+        prompt = f"閱讀新聞標題：{titles_str}。請用繁體中文回答：1.氣氛(偏多/偏空/中性)？ 2.一句話總結。(50字內)"
         response = model.generate_content(prompt)
         return response.text
-    except:
-        return "無法解讀新聞"
+    except: return "無法解讀"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_daily(holdings_text):
@@ -178,17 +186,16 @@ def ask_ai_daily(holdings_text):
         prompt = f"用戶庫存：{holdings_text}。請給 100 字內的繁體中文總評：加碼機會與風險提示。"
         response = model.generate_content(prompt)
         return response.text
-    except:
-        return "😅 AI 休息中。"
+    except: return "😅 AI 休息中。"
 
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 全方位看盤室 V8.2 (完美修復版)")
+st.title("📱 AI 操盤手戰情室 V8.3 (旗艦版)")
 
 tab1, tab2, tab3 = st.tabs(["🔍 個股行情", "📡 鑽石掃描", "📊 我的資產"])
 
-# --- Tab 1: 個股行情 ---
+# --- Tab 1: 個股行情 (大幅升級！) ---
 with tab1:
     col_input, col_btn = st.columns([3, 1])
     with col_input:
@@ -199,7 +206,7 @@ with tab1:
     target_id = smart_stock_parser(q_stock)
     target_name = get_stock_name(target_id)
     
-    info, hist = get_stock_detail(target_id)
+    info, hist, stock_obj = get_stock_detail(target_id)
     
     if info and not hist.empty:
         curr_price = info.get('currentPrice', hist.iloc[-1]['Close'])
@@ -207,62 +214,94 @@ with tab1:
         change = curr_price - prev_close
         pct_change = (change / prev_close) * 100
         
+        # 1. 準備數據
         ma60 = hist['Close'].rolling(window=60).mean().iloc[-1]
+        hist = calculate_kd(hist) # 計算 KD
+        
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60)
 
+        # 2. 顯示 Header
         st.markdown(f"## {target_name} ({target_id})")
-        
         c1, c2 = st.columns([2, 3])
         with c1:
             st.metric("股價", f"{curr_price:.1f}", f"{change:.1f} ({pct_change:.2f}%)")
         with c2:
             if is_diamond: st.success(f"💎 **鑽石好股** ({' '.join(badges)})")
             else: st.info(f"一般個股 ({' '.join(badges)})")
-            st.caption(f"目前位置：{tech_status}")
+            st.caption(f"位置：{tech_status}")
 
-        st.divider()
-
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("EPS", f"{eps:.2f}")
-        k2.metric("殖利率", f"{yield_val*100:.2f}%")
-        k3.metric("ROE", f"{roe*100:.1f}%")
-        k4.metric("本益比", f"{info.get('trailingPE', 'N/A')}")
+        # 3. 繪製多重圖表 (Price + KD + Volume)
+        st.subheader("📈 技術分析 (K線 + 季線 + KD + 成交量)")
         
-        st.subheader(f"📈 {target_name} 走勢圖")
+        # 建立 3 個子圖表
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, 
+                            vertical_spacing=0.05, 
+                            row_heights=[0.6, 0.2, 0.2],
+                            subplot_titles=("股價 & 季線", "KD 指標", "成交量"))
+
+        # Row 1: K 線圖 + MA60
         hist['MA60_Line'] = hist['Close'].rolling(window=60).mean()
-        fig = go.Figure()
-        fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'))
-        fig.add_trace(go.Scatter(x=hist.index, y=hist['MA60_Line'], mode='lines', name='季線', line=dict(color='orange', width=2)))
-        fig.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=0, b=0))
+        fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['MA60_Line'], mode='lines', name='季線(MA60)', line=dict(color='orange', width=2)), row=1, col=1)
+
+        # Row 2: KD 指標
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['K'], mode='lines', name='K值', line=dict(color='red', width=1.5)), row=2, col=1)
+        fig.add_trace(go.Scatter(x=hist.index, y=hist['D'], mode='lines', name='D值', line=dict(color='blue', width=1.5)), row=2, col=1)
+        # 畫 20/80 參考線
+        fig.add_hline(y=80, line_dash="dash", line_color="gray", row=2, col=1)
+        fig.add_hline(y=20, line_dash="dash", line_color="gray", row=2, col=1)
+
+        # Row 3: 成交量
+        colors = ['red' if row['Open'] - row['Close'] >= 0 else 'green' for index, row in hist.iterrows()]
+        fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], name='成交量', marker_color=colors), row=3, col=1)
+
+        fig.update_layout(xaxis_rangeslider_visible=False, height=800, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # --- 新聞專區 (過濾版) ---
-        st.subheader("📰 最新消息與 AI 解讀")
-        news = get_stock_news(target_id)
-        if news:
-            if ai_available:
-                with st.spinner("AI 正在閱讀新聞..."):
-                    sentiment = ask_ai_news(news)
-                    st.success(f"🤖 **AI 新聞短評**：{sentiment}")
-            
-            for n in news:
-                # 這裡一定有 title，因為我們在 get_stock_news 已經過濾過了
-                st.markdown(f"- [{n['title']}]({n['link']})")
-        else:
-            st.caption("暫無相關新聞 (或來源無標題)")
-            
+        # 4. 歷年股利圖表
+        st.subheader("💰 歷年股利發放紀錄")
+        try:
+            divs = stock_obj.dividends
+            if not divs.empty:
+                # 只取最近 10 次
+                last_divs = divs.tail(10)
+                div_fig = go.Figure(data=[go.Bar(x=last_divs.index, y=last_divs.values, marker_color='gold')])
+                div_fig.update_layout(title="近年配息金額", yaxis_title="元", height=300)
+                st.plotly_chart(div_fig, use_container_width=True)
+            else:
+                st.info("查無配息紀錄")
+        except:
+            st.info("無法取得股利資料")
+
         st.divider()
 
-        if st.button(f"🤖 呼叫 AI 分析基本面 {target_name}"):
-            if ai_available:
-                with st.spinner("AI 分析中..."):
-                    info_text = f"價{curr_price}, EPS{eps}, ROE{roe}, 殖利率{yield_val}"
-                    res = ask_ai_single(target_id, target_name, info_text)
-                    st.info(res)
-            else: st.error("無 AI Key")
+        # 5. 新聞與 AI
+        col_news, col_ai = st.columns([1, 1])
+        
+        with col_news:
+            st.subheader("📰 最新消息")
+            news = get_stock_news(target_id)
+            if news:
+                if ai_available:
+                    with st.spinner("AI 解讀新聞..."):
+                        sentiment = ask_ai_news(news)
+                        st.info(f"🤖 {sentiment}")
+                for n in news:
+                    st.markdown(f"- [{n['title']}]({n['link']})")
+            else: st.caption("無新聞")
+
+        with col_ai:
+            st.subheader("🤖 個股健檢")
+            if st.button(f"呼叫 AI 分析 {target_name}"):
+                if ai_available:
+                    with st.spinner("AI 分析中..."):
+                        info_text = f"價{curr_price}, EPS{eps}, ROE{roe}, 殖利率{yield_val}"
+                        res = ask_ai_single(target_id, target_name, info_text)
+                        st.success(res)
+                else: st.error("無 AI Key")
     else: st.warning("查無資料")
 
-# --- Tab 2: 鑽石掃描 (修復版) ---
+# --- Tab 2: 鑽石掃描 ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     if st.button("⚡ 開始掃描", type="primary"):
@@ -274,9 +313,9 @@ with tab2:
                 scan_list += df_inv["代號"].unique().tolist()
             except: pass
             
-        with st.spinner("正在尋找便宜好股..."):
+        with st.spinner("尋找便宜好股..."):
             for t in scan_list:
-                info, hist = get_stock_detail(t)
+                info, hist, _ = get_stock_detail(t)
                 if info and not hist.empty:
                     p = hist.iloc[-1]['Close']
                     m = hist['Close'].rolling(window=60).mean().iloc[-1]
@@ -289,7 +328,6 @@ with tab2:
             df_res = pd.DataFrame(report).sort_values("是鑽石嗎", ascending=False)
             for _, row in df_res.iterrows():
                 with st.container():
-                    # 這裡就是之前報錯的地方，現在修好了
                     c1, c2, c3 = st.columns([1.5, 2, 2])
                     title = f"💎 {row['名稱']} ({row['代號']})" if row['是鑽石嗎'] else f"{row['名稱']} ({row['代號']})"
                     c1.markdown(f"### {title}")
@@ -305,7 +343,6 @@ with tab3:
         with st.form("trade_form"):
             t_input = st.text_input("代號 (如 2330)", "2330")
             act = st.selectbox("動作", ["🔴 買進", "🟢 賣出"])
-            
             t_id = smart_stock_parser(t_input)
             cur_p = get_stock_price(t_id)
             pr = st.number_input("價格", min_value=0.0, value=float(cur_p) if cur_p>0 else 0.0)
@@ -332,7 +369,6 @@ with tab3:
             c1, c2 = st.columns(2)
             c1.metric("總資產", f"${total:,.0f}")
             c2.metric("總損益", f"${profit:,.0f}")
-            
             st.dataframe(holdings[["日期", "名稱", "代號", "股數", "成本", "現價", "市值"]], use_container_width=True)
             
             if st.button("🤖 庫存健檢 (AI 分析)"):
@@ -341,5 +377,5 @@ with tab3:
                         res = ask_ai_daily(holdings[["名稱", "股數", "成本", "現價"]].to_string())
                         st.info(res)
                 else: st.error("無 AI Key")
-        else: st.info("尚無庫存，請從側邊欄新增交易。")
-    else: st.info("目前無交易紀錄，請從側邊欄新增交易。")
+        else: st.info("尚無庫存")
+    else: st.info("無交易紀錄")
