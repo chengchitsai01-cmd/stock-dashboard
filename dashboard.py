@@ -124,19 +124,35 @@ def evaluate_stock(info, price, ma60):
 # ==========================================
 # 修改這一段函數 (加入錯誤處理機制)
 # ==========================================
+# ==========================================
+# 🚀 V7.5 防塞車優化補丁 (請覆蓋 ask_ai_single 函數)
+# ==========================================
+
+# 1. 加上 @st.cache_data，讓它記住答案 24 小時 (ttl=86400)
+# 這樣同一支股票今天問過一次，第二次就不會消耗額度！
+@st.cache_data(ttl=86400, show_spinner=False) 
 def ask_ai_single(ticker, stock_name, info_str):
     try:
-        # 這裡改用更穩定的 1.5 flash 模型
+        # 2. 改用 1.5-flash 模型 (速度最快，額度較寬鬆)
         model = genai.GenerativeModel('gemini-1.5-flash') 
-        prompt = f"分析個股 {stock_name} ({ticker})：{info_str}。請用繁體中文簡短說明：1.公司業務簡介 2.目前估值狀態 3.存股建議。"
         
-        # 設定等待逾時，避免卡住
+        prompt = f"""
+        你是一位台股分析師。請分析 {stock_name} ({ticker})：
+        基本面數據：{info_str}
+        
+        請用繁體中文，針對「存股族」給出 3 點建議 (總字數 150 字以內)：
+        1. 業務簡介 (一句話)
+        2. 估值狀態 (便宜/昂貴?)
+        3. 操作建議 (長期持有/觀望?)
+        """
+        
+        # 發送請求
         response = model.generate_content(prompt)
         return response.text
         
     except Exception as e:
-        # 如果出錯 (例如額度滿了)，回傳這句溫柔的話，而不是報錯
-        return f"😅 AI 目前大塞車 (額度已滿)，請休息 1 分鐘後再試試！(錯誤代碼: {str(e)})"
+        # 如果真的還是塞車，回傳這個，但不會讓程式崩潰
+        return "😅 AI 伺服器正在排隊中，請過 1 分鐘後再試 (或先按別支股票)。"
 
 # ==========================================
 # 3. 主程式介面
@@ -283,4 +299,5 @@ with tab3:
             st.dataframe(holdings[["日期", "名稱", "代號", "股數", "成本", "現價", "市值"]], use_container_width=True)
         else: st.info("尚無庫存")
     else: st.info("請從側邊欄新增交易")
+
 
