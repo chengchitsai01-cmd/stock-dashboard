@@ -9,17 +9,15 @@ import time
 import random
 
 # ==========================================
-# 1. 設定與金鑰檢查
+# 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 全方位看盤室 V7.8 (完全修復版)", layout="wide")
+st.set_page_config(page_title="AI 全方位看盤室 V7.9 (經典穩定版)", layout="wide")
 
-# 嘗試讀取 Secrets
 try:
     if "GOOGLE_API_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         ai_available = True
     else:
-        # 本地端測試用
         import toml
         secrets = toml.load(".streamlit/secrets.toml")
         genai.configure(api_key=secrets["GOOGLE_API_KEY"])
@@ -30,7 +28,7 @@ except:
 DATA_FILE = "trade_history.csv"
 
 # ==========================================
-# 2. 資料對照表與工具函數
+# 2. 資料與工具
 # ==========================================
 STOCK_MAP = {
     "台積電": "2330.TW", "鴻海": "2317.TW", "聯發科": "2454.TW", 
@@ -106,16 +104,19 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心：防塞車雙保險 (Ask Single)
+# 3. AI 核心：回歸經典版 (1.5 Flash)
 # ==========================================
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str):
-    models_to_try = ['gemini-2.0-flash-exp', 'gemini-1.5-flash']
+    # 這就是目前最穩定的版本 (通常大家說的 latest 就是指這個)
+    model_name = 'gemini-1.5-flash' 
     
-    for model_name in models_to_try:
+    # 簡單的重試機制 (最多 2 次，避免一直轉圈)
+    for attempt in range(2):
         try:
-            time.sleep(random.uniform(0.5, 1.5)) # 隨機等待
+            time.sleep(1) # 稍微休息一下再發請求
             model = genai.GenerativeModel(model_name)
+            
             prompt = f"""
             分析台股 {stock_name} ({ticker})：
             數據：{info_str}
@@ -124,13 +125,11 @@ def ask_ai_single(ticker, stock_name, info_str):
             response = model.generate_content(prompt)
             return response.text
         except:
+            time.sleep(2) # 失敗了睡 2 秒重試
             continue
             
-    return "😅 系統繁忙 (Google API 限流)，請休息 2 分鐘後再試。"
+    return "😅 AI 伺服器忙線中，請稍後再按一次。"
 
-# ==========================================
-# 4. AI 核心：庫存總評 (Ask Daily)
-# ==========================================
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_daily(holdings_text):
     try:
@@ -139,12 +138,12 @@ def ask_ai_daily(holdings_text):
         response = model.generate_content(prompt)
         return response.text
     except:
-        return "😅 AI 休息中，請稍後再試。"
+        return "😅 AI 休息中。"
 
 # ==========================================
-# 5. 主程式介面
+# 4. 主程式介面
 # ==========================================
-st.title("📱 AI 全方位看盤室 V7.8 (完全修復版)")
+st.title("📱 AI 全方位看盤室 V7.9 (經典版)")
 
 tab1, tab2, tab3 = st.tabs(["🔍 個股行情", "📡 鑽石掃描", "📊 我的資產"])
 
@@ -198,7 +197,7 @@ with tab1:
         
         if st.button(f"🤖 呼叫 AI 分析 {target_name}"):
             if ai_available:
-                with st.spinner("AI 正在思考中..."):
+                with st.spinner("AI 分析中..."):
                     info_text = f"價{curr_price}, EPS{eps}, ROE{roe}, 殖利率{yield_val}"
                     res = ask_ai_single(target_id, target_name, info_text)
                     st.info(res)
@@ -240,39 +239,27 @@ with tab2:
                     st.divider()
         else: st.info("無符合結果")
 
-# --- Tab 3: 我的資產 (模擬交易功能回歸！) ---
+# --- Tab 3: 我的資產 ---
 with tab3:
-    # 這裡就是消失的側邊欄，我把它加回來了！
     with st.sidebar:
         st.header("📝 交易登記 (模擬)")
         with st.form("trade_form"):
             t_input = st.text_input("代號 (如 2330)", "2330")
             act = st.selectbox("動作", ["🔴 買進", "🟢 賣出"])
             
-            # 自動抓現在股價當預設值
             t_id = smart_stock_parser(t_input)
             cur_p = get_stock_price(t_id)
-            
             pr = st.number_input("價格", min_value=0.0, value=float(cur_p) if cur_p>0 else 0.0)
             sh = st.number_input("股數", min_value=1, value=1000, step=100)
             
             if st.form_submit_button("送出交易"):
                 if os.path.exists(DATA_FILE): df = pd.read_csv(DATA_FILE)
                 else: df = pd.DataFrame(columns=["日期", "代號", "動作", "成本", "股數"])
-                
-                new = pd.DataFrame({
-                    "日期":[datetime.now().strftime("%Y-%m-%d")],
-                    "代號":[t_id],
-                    "動作":[act],
-                    "成本":[pr],
-                    "股數":[sh]
-                })
-                # 存檔
+                new = pd.DataFrame({"日期":[datetime.now().strftime("%Y-%m-%d")],"代號":[t_id],"動作":[act],"成本":[pr],"股數":[sh]})
                 pd.concat([new, df]).to_csv(DATA_FILE, index=False)
                 st.success(f"已記錄：{act} {t_id}")
-                st.rerun() # 重新整理頁面顯示最新資料
+                st.rerun()
 
-    # 顯示資產表格
     if os.path.exists(DATA_FILE):
         df = pd.read_csv(DATA_FILE)
         holdings = df[df["動作"].str.contains("買")].copy()
@@ -289,14 +276,11 @@ with tab3:
             
             st.dataframe(holdings[["日期", "名稱", "代號", "股數", "成本", "現價", "市值"]], use_container_width=True)
             
-            st.divider()
-            
-            # AI 庫存分析按鈕
             if st.button("🤖 庫存健檢 (AI 分析)"):
                 if ai_available:
-                     with st.spinner("AI 正在檢視你的投資組合..."):
+                     with st.spinner("AI 檢視中..."):
                         res = ask_ai_daily(holdings[["名稱", "股數", "成本", "現價"]].to_string())
                         st.info(res)
                 else: st.error("無 AI Key")
-        else: st.info("尚無庫存，請從側邊欄新增第一筆交易！")
-    else: st.info("目前無交易紀錄，請從側邊欄 (Sidebar) 新增交易。")
+        else: st.info("尚無庫存，請從側邊欄新增交易。")
+    else: st.info("目前無交易紀錄，請從側邊欄新增交易。")
