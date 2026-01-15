@@ -5,6 +5,7 @@ import yfinance as yf
 import google.generativeai as genai
 import plotly.graph_objects as go
 from datetime import datetime
+import time
 
 # ==========================================
 # 1. 設定
@@ -121,38 +122,45 @@ def evaluate_stock(info, price, ma60):
 
     return badges, is_diamond, status_text, eps, yield_val, roe
 
-# ==========================================
-# 修改這一段函數 (加入錯誤處理機制)
-# ==========================================
-# ==========================================
-# 🚀 V7.5 防塞車優化補丁 (請覆蓋 ask_ai_single 函數)
-# ==========================================
-
-# 1. 加上 @st.cache_data，讓它記住答案 24 小時 (ttl=86400)
-# 這樣同一支股票今天問過一次，第二次就不會消耗額度！
-@st.cache_data(ttl=86400, show_spinner=False) 
+@st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str):
-    try:
-        # 2. 改用 1.5-flash 模型 (速度最快，額度較寬鬆)
-        model = genai.GenerativeModel('gemini-1.5-flash') 
-        
-        prompt = f"""
-        你是一位台股分析師。請分析 {stock_name} ({ticker})：
-        基本面數據：{info_str}
-        
-        請用繁體中文，針對「存股族」給出 3 點建議 (總字數 150 字以內)：
-        1. 業務簡介 (一句話)
-        2. 估值狀態 (便宜/昂貴?)
-        3. 操作建議 (長期持有/觀望?)
-        """
-        
-        # 發送請求
-        response = model.generate_content(prompt)
-        return response.text
-        
-    except Exception as e:
-        # 如果真的還是塞車，回傳這個，但不會讓程式崩潰
-        return "😅 AI 伺服器正在排隊中，請過 1 分鐘後再試 (或先按別支股票)。"
+    # 嘗試次數設定 (死纏爛打 3 次)
+    max_retries = 3
+    
+    # 優先使用 Google 最新、比較不塞車的 2.0 模型
+    model_name = 'gemini-2.0-flash-exp' 
+    
+    for attempt in range(max_retries):
+        try:
+            model = genai.GenerativeModel(model_name)
+            
+            prompt = f"""
+            你是一位資深台股操盤手。請分析 {stock_name} ({ticker})：
+            基本面數據：{info_str}
+            
+            請用繁體中文，給出 3 點「快狠準」的短評 (總字數 100 字內)：
+            1. 亮點 (一句話)
+            2. 風險 (一句話)
+            3. 結論 (買進/觀望/賣出?)
+            """
+            
+            # 發送請求
+            response = model.generate_content(prompt)
+            return response.text
+            
+        except Exception as e:
+            # 如果報錯了 (ResourceExhausted)
+            if attempt < max_retries - 1:
+                # 計算要睡幾秒 (第一次睡 2秒，第二次睡 4秒...)
+                wait_time = 2 * (attempt + 1)
+                time.sleep(wait_time)
+                # 這裡不回傳，讓迴圈繼續跑，進行下一次嘗試
+                continue
+            else:
+                # 真的試了 3 次都不行，才放棄
+                return f"🤯 AI 真的太熱門了，試了 3 次都擠不進去。請過 5 分鐘後再來！(錯誤: {model_name} 忙線中)"
+
+    return "未知錯誤"
 
 # ==========================================
 # 3. 主程式介面
@@ -299,5 +307,6 @@ with tab3:
             st.dataframe(holdings[["日期", "名稱", "代號", "股數", "成本", "現價", "市值"]], use_container_width=True)
         else: st.info("尚無庫存")
     else: st.info("請從側邊欄新增交易")
+
 
 
