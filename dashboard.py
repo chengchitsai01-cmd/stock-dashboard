@@ -12,14 +12,14 @@ import random
 # ==========================================
 # 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 操盤手戰情室 V9.4 (省電耐用版)", layout="wide")
+st.set_page_config(page_title="AI 操盤手戰情室 V9.7 (點名版)", layout="wide")
 
-# 🟢 強制指定高額度模型 (關鍵修復！)
-# 1.5-flash 通常每天有 1500 次免費額度，比 pro 或實驗版多很多
-TARGET_MODEL = 'gemini-1.5-flash'
+# 🟢 全域變數，用來存活著的模型
+VALID_MODEL_NAME = None
 
-def init_ai():
+def init_and_find_model():
     api_key = None
+    # 1. 抓 Key
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
     else:
@@ -31,12 +31,55 @@ def init_ai():
         except:
             pass
             
-    if api_key:
-        genai.configure(api_key=api_key)
-        return True, api_key
-    return False, None
+    if not api_key:
+        return False, None, [], "無 Key"
 
-AI_AVAILABLE, API_KEY = init_ai()
+    # 2. 設定 Key
+    genai.configure(api_key=api_key)
+    
+    # 3. 點名！(列出所有可用模型)
+    available_models = []
+    log_msg = ""
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                # 只抓名字 (例如 models/gemini-1.5-flash)
+                available_models.append(m.name)
+    except Exception as e:
+        return False, None, [], f"列出模型失敗: {str(e)}"
+
+    # 4. 選秀 (挑選最佳模型)
+    # 優先順序：1.5 flash -> 1.5 pro -> 1.0 pro -> 2.5 (額度少最後選) -> 隨便選
+    best_choice = None
+    
+    # 策略 A: 找 1.5 Flash (最穩)
+    for m in available_models:
+        if '1.5-flash' in m: 
+            best_choice = m
+            break
+            
+    # 策略 B: 找 1.5 Pro (次穩)
+    if not best_choice:
+        for m in available_models:
+            if '1.5-pro' in m:
+                best_choice = m
+                break
+                
+    # 策略 C: 找 Pro (舊版)
+    if not best_choice:
+        for m in available_models:
+            if 'gemini-pro' in m and 'vision' not in m: # 排除 vision 版
+                best_choice = m
+                break
+
+    # 策略 D: 真的沒魚蝦也好，選清單裡的第一個
+    if not best_choice and available_models:
+        best_choice = available_models[0]
+
+    return True, best_choice, available_models, api_key
+
+# 初始化 AI
+AI_AVAILABLE, VALID_MODEL_NAME, MODEL_LIST, API_KEY_DEBUG = init_and_find_model()
 DATA_FILE = "trade_history.csv"
 
 # ==========================================
@@ -157,109 +200,102 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心 (使用 gemini-1.5-flash，額度最大)
+# 3. AI 核心 (使用自動挑選的模型)
 # ==========================================
 def ask_ai_test():
-    """測試連線"""
+    if not VALID_MODEL_NAME:
+        return False, "沒有找到可用的模型"
     try:
-        model = genai.GenerativeModel(TARGET_MODEL)
+        model = genai.GenerativeModel(VALID_MODEL_NAME)
         response = model.generate_content("Test")
-        return True, f"成功 (Model: {TARGET_MODEL})"
+        return True, f"成功！使用: {VALID_MODEL_NAME}"
     except Exception as e:
-        # 如果 1.5 flash 失敗，嘗試降級到 gemini-pro
-        try:
-            fallback = 'gemini-pro'
-            model = genai.GenerativeModel(fallback)
-            response = model.generate_content("Test")
-            return True, f"成功 (降級使用: {fallback})"
-        except Exception as e2:
-            return False, str(e)
+        return False, str(e)
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str, tech_str):
-    if not AI_AVAILABLE: return "⚠️ AI 未連線"
+    if not AI_AVAILABLE or not VALID_MODEL_NAME: return "⚠️ AI 未連線"
     
-    # 優先嘗試 1.5 flash
-    models = [TARGET_MODEL, 'gemini-pro']
-    
-    for m in models:
-        try:
-            time.sleep(1)
-            model = genai.GenerativeModel(m)
-            prompt = f"""
-            你是技術分析師。分析 {stock_name} ({ticker})。
-            【技術】{tech_str}
-            【基本】{info_str}
-            請用繁體中文給建議 (100字內)：1.趨勢 2.操作 3.理由
-            """
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            if "429" in str(e):
-                return "⛔ 今日免費額度已用完，請明天再來 (或休息幾分鐘)"
-            continue
-
-    return "😅 系統繁忙，請稍後再試"
+    try:
+        time.sleep(1)
+        model = genai.GenerativeModel(VALID_MODEL_NAME)
+        prompt = f"""
+        你是技術分析師。分析 {stock_name} ({ticker})。
+        【技術】{tech_str}
+        【基本】{info_str}
+        請用繁體中文給建議 (100字內)：1.趨勢 2.操作 3.理由
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        if "429" in str(e):
+            return "⛔ 額度用盡，請休息一下"
+        return f"🚫 分析失敗: {str(e)}"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_news(news_list):
     if not news_list: return ""
+    if not VALID_MODEL_NAME: return ""
     titles = [n['title'] for n in news_list if 'title' in n]
     if not titles: return ""
     titles_str = "\n".join(titles)
     
-    models = [TARGET_MODEL, 'gemini-pro']
-    for m in models:
-        try:
-            model = genai.GenerativeModel(m)
-            prompt = f"新聞標題：{titles_str}。回答：1.氣氛 2.重點。"
-            response = model.generate_content(prompt)
-            return response.text
-        except: continue
-    return ""
+    try:
+        model = genai.GenerativeModel(VALID_MODEL_NAME)
+        prompt = f"新聞標題：{titles_str}。回答：1.氣氛 2.重點。"
+        response = model.generate_content(prompt)
+        return response.text
+    except: return ""
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_todo_list(portfolio_status_str):
-    models = [TARGET_MODEL, 'gemini-pro']
-    for m in models:
-        try:
-            model = genai.GenerativeModel(m)
-            prompt = f"庫存：{portfolio_status_str}。請給操作建議清單。"
-            response = model.generate_content(prompt)
-            return response.text
-        except: continue
-    return "😅 AI 休息中..."
+    if not VALID_MODEL_NAME: return "⚠️ AI 未連線"
+    try:
+        model = genai.GenerativeModel(VALID_MODEL_NAME)
+        prompt = f"庫存：{portfolio_status_str}。請給操作建議清單。"
+        response = model.generate_content(prompt)
+        return response.text
+    except: return "😅 AI 休息中..."
 
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 操盤手戰情室 V9.4 (省電耐用版)")
+st.title("📱 AI 操盤手戰情室 V9.7 (點名版)")
 
-# --- 側邊欄：系統診斷區 ---
+# --- 側邊欄：系統診斷區 (關鍵！) ---
 with st.sidebar:
     st.header("🚑 系統診斷室")
     if AI_AVAILABLE:
-        st.success("✅ API Key 已載入")
-        st.caption(f"預設模型: {TARGET_MODEL}")
+        st.success("✅ 連線成功")
+        st.info(f"🏆 自動選用模型：\n{VALID_MODEL_NAME}")
+        
+        with st.expander("📋 查看可用模型清單"):
+            if MODEL_LIST:
+                for m in MODEL_LIST:
+                    st.write(f"- {m}")
+            else:
+                st.write("清單為空 (怪怪的...)")
     else:
-        st.error("❌ 找不到 API Key")
+        st.error("❌ 連線失敗")
+        if not API_KEY_DEBUG:
+            st.warning("找不到 API Key")
+        else:
+            st.warning("有 Key，但無法列出模型 (可能 Key 權限不足)")
 
     st.divider()
     
     if st.button("🛠️ 測試 AI 連線"):
         if AI_AVAILABLE:
-            with st.spinner(f"正在連線 {TARGET_MODEL}..."):
+            with st.spinner(f"正在連線 {VALID_MODEL_NAME}..."):
                 success, msg = ask_ai_test()
                 if success:
-                    st.success("🎉 連線成功！")
-                    st.info(msg)
+                    st.success("🎉 真的通了！")
+                    st.write(msg)
                 else:
-                    st.error("💀 連線失敗")
+                    st.error("💀 還是不通")
                     st.code(msg)
-                    if "429" in msg:
-                        st.warning("⚠️ 額度用盡，請等待重置。")
         else:
-            st.warning("請先設定 API Key")
+            st.warning("無法測試")
     
     st.divider()
 
@@ -337,7 +373,7 @@ with tab1:
                 else: tech_text += "股價在季線下(弱)。"
                 info_text = f"EPS{eps}, ROE{roe}, 殖利率{yield_val}。"
                 
-                with st.spinner("AI 分析中..."):
+                with st.spinner(f"AI ({VALID_MODEL_NAME}) 分析中..."):
                     ai_comment = ask_ai_single(target_id, target_name, info_text, tech_text)
                     st.info(f"💡 **AI 觀點**：\n\n{ai_comment}")
             else:
@@ -437,7 +473,7 @@ with tab3:
             st.subheader("📅 今日 AI 操盤待辦")
             if st.button("🚀 生成今日操作清單", type="primary"):
                 if AI_AVAILABLE:
-                    with st.spinner("AI 正在逐一檢視..."):
+                    with st.spinner(f"AI ({VALID_MODEL_NAME}) 正在逐一檢視..."):
                         portfolio_status = ""
                         for idx, row in holdings.iterrows():
                             t_id = row['代號']
