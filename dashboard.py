@@ -12,18 +12,16 @@ import random
 # ==========================================
 # 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 操盤手戰情室 V9.0 (系統急診版)", layout="wide")
+st.set_page_config(page_title="AI 操盤手戰情室 V9.2 (經典回歸版)", layout="wide")
 
 # ==========================================
-# 2. 系統診斷核心 (關鍵！)
+# 2. 系統診斷核心
 # ==========================================
 def init_ai():
     api_key = None
-    # 1. 先試試看 st.secrets (雲端)
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
     else:
-        # 2. 再試試看本地檔案
         try:
             import toml
             secrets = toml.load(".streamlit/secrets.toml")
@@ -159,94 +157,94 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 4. AI 核心 (不使用 cache，確保每次都真的測試)
+# 4. AI 核心 (使用最經典的 gemini-pro)
 # ==========================================
 def ask_ai_test():
     """系統診斷專用：測試連線"""
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content("Hello, this is a test.")
-        return True, response.text
+        # 回歸最經典的 model，這一定相容
+        model = genai.GenerativeModel('gemini-pro')
+        response = model.generate_content("Test connection.")
+        return True, "成功連線 (Model: gemini-pro)"
     except Exception as e:
         return False, str(e)
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str, tech_str):
-    model_name = 'gemini-1.5-flash' 
+    # 使用 gemini-pro，解決 404 問題
+    model_name = 'gemini-pro'
+    
     try:
-        for attempt in range(2):
-            try:
-                time.sleep(1) 
-                model = genai.GenerativeModel(model_name)
-                prompt = f"""
-                你是技術分析師。分析 {stock_name} ({ticker})。
-                【技術】{tech_str}
-                【基本】{info_str}
-                請用繁體中文給建議 (100字內)：1.趨勢 2.操作 3.理由
-                """
-                response = model.generate_content(prompt)
-                return response.text
-            except Exception:
-                time.sleep(2)
-                continue
-        return "😅 AI 伺服器忙線中，請稍後再試。"
-    except Exception:
-        return f"🚫 無法連線"
+        time.sleep(1)
+        model = genai.GenerativeModel(model_name)
+        prompt = f"""
+        你是技術分析師。分析 {stock_name} ({ticker})。
+        【技術】{tech_str}
+        【基本】{info_str}
+        請用繁體中文給建議 (100字內)：1.趨勢 2.操作 3.理由
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"🚫 連線失敗: {str(e)}"
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_news(news_list):
+    # 使用 gemini-pro
+    model_name = 'gemini-pro'
+    
+    if not news_list: return ""
+    titles = [n['title'] for n in news_list if 'title' in n]
+    if not titles: return ""
+    titles_str = "\n".join(titles)
+    
     try:
-        if not news_list: return ""
-        titles = [n['title'] for n in news_list if 'title' in n]
-        if not titles: return ""
-        titles_str = "\n".join(titles)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel(model_name)
         prompt = f"新聞標題：{titles_str}。回答：1.氣氛 2.重點。"
         response = model.generate_content(prompt)
         return response.text
-    except: return ""
+    except: 
+        return ""
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def ask_ai_todo_list(portfolio_status_str):
+    # 使用 gemini-pro
+    model_name = 'gemini-pro'
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel(model_name)
         prompt = f"庫存：{portfolio_status_str}。請給操作建議清單。"
         response = model.generate_content(prompt)
         return response.text
-    except: return "😅 AI 休息中..."
+    except: 
+        return "😅 AI 休息中..."
 
 # ==========================================
 # 5. 主程式介面
 # ==========================================
-st.title("📱 AI 操盤手戰情室 V9.0 (系統急診版)")
+st.title("📱 AI 操盤手戰情室 V9.2 (經典回歸版)")
 
-# --- 側邊欄：系統診斷區 (重點！) ---
+# --- 側邊欄：系統診斷區 ---
 with st.sidebar:
     st.header("🚑 系統診斷室")
-    
-    # 1. 檢查鑰匙是否存在
     if ai_available:
         st.success("✅ API Key 已載入")
-        # 顯示 Key 的前 4 碼，讓你確認是不是新的
         if current_key:
             st.caption(f"Key 前四碼: {current_key[:4]}...")
     else:
         st.error("❌ 找不到 API Key")
-        st.info("請檢查 Streamlit Cloud 的 Secrets 設定。")
 
     st.divider()
     
-    # 2. 手動連線測試
     if st.button("🛠️ 測試 AI 連線"):
         if ai_available:
-            with st.spinner("正在呼叫 Google Gemini..."):
+            with st.spinner("正在連線 (gemini-pro)..."):
                 success, msg = ask_ai_test()
                 if success:
-                    st.success("🎉 連線成功！AI 活著！")
-                    st.caption(f"回應: {msg}")
+                    st.success("🎉 連線成功！")
+                    st.info(msg)
                 else:
                     st.error("💀 連線失敗")
-                    st.code(msg, language="text") # 顯示詳細錯誤代碼
+                    st.code(msg)
         else:
             st.warning("請先設定 API Key")
     
@@ -283,10 +281,8 @@ with tab1:
         
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60_val)
 
-        # 改回手動按鈕，避免自動掃描導致塞車
         st.markdown(f"## {target_name} ({target_id})")
         
-        # 儀表板區
         c1, c2 = st.columns([1, 1])
         with c1:
             fig_gauge = go.Figure(go.Indicator(
@@ -321,8 +317,7 @@ with tab1:
 
         st.divider()
         
-        # AI 按鈕區
-        if st.button(f"🤖 呼叫 AI 分析 {target_name} (請點我)"):
+        if st.button(f"🤖 呼叫 AI 分析 {target_name}"):
             if ai_available:
                 tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
                 if curr_price > ma60_val: tech_text += "股價在季線上(強)。"
@@ -335,7 +330,6 @@ with tab1:
             else:
                 st.error("請先在側邊欄檢查 AI 連線")
 
-        # 繪圖區
         st.subheader("📈 技術分析")
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.2, 0.2])
         fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
@@ -349,7 +343,6 @@ with tab1:
         fig.update_layout(xaxis_rangeslider_visible=False, height=800, margin=dict(l=0, r=0, t=30, b=0))
         st.plotly_chart(fig, use_container_width=True)
         
-        # 新聞區
         st.subheader("📰 最新消息")
         news = get_stock_news(target_id)
         if news:
@@ -362,7 +355,6 @@ with tab1:
         
     else: st.warning("查無資料")
 
-# --- Tab 2 & 3: 保持原樣 ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     if st.button("⚡ 開始掃描", type="primary"):
