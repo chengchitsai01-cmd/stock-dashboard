@@ -12,24 +12,37 @@ import random
 # ==========================================
 # 1. 設定
 # ==========================================
-st.set_page_config(page_title="AI 操盤手戰情室 V8.9 (儀表板版)", layout="wide")
+st.set_page_config(page_title="AI 操盤手戰情室 V9.0 (系統急診版)", layout="wide")
 
-try:
+# ==========================================
+# 2. 系統診斷核心 (關鍵！)
+# ==========================================
+def init_ai():
+    api_key = None
+    # 1. 先試試看 st.secrets (雲端)
     if "GOOGLE_API_KEY" in st.secrets:
-        genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        ai_available = True
+        api_key = st.secrets["GOOGLE_API_KEY"]
     else:
-        import toml
-        secrets = toml.load(".streamlit/secrets.toml")
-        genai.configure(api_key=secrets["GOOGLE_API_KEY"])
-        ai_available = True
-except:
-    ai_available = False
+        # 2. 再試試看本地檔案
+        try:
+            import toml
+            secrets = toml.load(".streamlit/secrets.toml")
+            if "GOOGLE_API_KEY" in secrets:
+                api_key = secrets["GOOGLE_API_KEY"]
+        except:
+            pass
+            
+    if api_key:
+        genai.configure(api_key=api_key)
+        return True, api_key
+    return False, None
+
+ai_available, current_key = init_ai()
 
 DATA_FILE = "trade_history.csv"
 
 # ==========================================
-# 2. 資料與工具
+# 3. 資料與工具
 # ==========================================
 STOCK_MAP = {
     "台積電": "2330.TW", "鴻海": "2317.TW", "聯發科": "2454.TW", 
@@ -106,23 +119,14 @@ def calculate_kd(df, period=9):
     df['D'] = d_list
     return df
 
-# --- V8.9 新增：計算儀表板分數 ---
 def calculate_score(price, ma60, k, d, vol, vol_avg):
-    score = 50 # 基礎分
-    
-    # 趨勢面
+    score = 50
     if price > ma60: score += 15
     else: score -= 15
-    
-    # KD面
     if k > d: score += 10
-    if k > 80: score -= 5 # 過熱扣分
-    if k < 20: score += 10 # 超賣加分
-    
-    # 量能面
+    if k > 80: score -= 5
+    if k < 20: score += 10
     if vol > vol_avg: score += 5
-    
-    # 限制範圍 0-100
     return max(0, min(100, score))
 
 def evaluate_stock(info, price, ma60):
@@ -155,8 +159,17 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心
+# 4. AI 核心 (不使用 cache，確保每次都真的測試)
 # ==========================================
+def ask_ai_test():
+    """系統診斷專用：測試連線"""
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content("Hello, this is a test.")
+        return True, response.text
+    except Exception as e:
+        return False, str(e)
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str, tech_str):
     model_name = 'gemini-1.5-flash' 
@@ -166,20 +179,17 @@ def ask_ai_single(ticker, stock_name, info_str, tech_str):
                 time.sleep(1) 
                 model = genai.GenerativeModel(model_name)
                 prompt = f"""
-                你是技術分析師。請分析 {stock_name} ({ticker})。
+                你是技術分析師。分析 {stock_name} ({ticker})。
                 【技術】{tech_str}
                 【基本】{info_str}
-                請用繁體中文，像老師一樣直接告訴我 (100字內)：
-                1. 趨勢判斷 (多頭/空頭/盤整)
-                2. 操作建議 (該買/該賣/觀望?)
-                3. 原因簡述
+                請用繁體中文給建議 (100字內)：1.趨勢 2.操作 3.理由
                 """
                 response = model.generate_content(prompt)
                 return response.text
             except Exception:
                 time.sleep(2)
                 continue
-        return "😅 AI 休息中..."
+        return "😅 AI 伺服器忙線中，請稍後再試。"
     except Exception:
         return f"🚫 無法連線"
 
@@ -191,7 +201,7 @@ def ask_ai_news(news_list):
         if not titles: return ""
         titles_str = "\n".join(titles)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"新聞標題：{titles_str}。請用繁體中文回答：1.氣氛(偏多/偏空) 2.一句話重點。"
+        prompt = f"新聞標題：{titles_str}。回答：1.氣氛 2.重點。"
         response = model.generate_content(prompt)
         return response.text
     except: return ""
@@ -200,21 +210,47 @@ def ask_ai_news(news_list):
 def ask_ai_todo_list(portfolio_status_str):
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"""
-        用戶庫存狀態：
-        {portfolio_status_str}
-        請根據「成本」與「技術面」，給出【今日操作待辦清單】(條列式)：
-        - [動作] 股票名稱：簡短理由
-        動作選項：[續抱]、[加碼]、[減碼]、[出清]、[觀望]。
-        """
+        prompt = f"庫存：{portfolio_status_str}。請給操作建議清單。"
         response = model.generate_content(prompt)
         return response.text
     except: return "😅 AI 休息中..."
 
 # ==========================================
-# 4. 主程式介面
+# 5. 主程式介面
 # ==========================================
-st.title("📱 AI 操盤手戰情室 V8.9 (儀表板版)")
+st.title("📱 AI 操盤手戰情室 V9.0 (系統急診版)")
+
+# --- 側邊欄：系統診斷區 (重點！) ---
+with st.sidebar:
+    st.header("🚑 系統診斷室")
+    
+    # 1. 檢查鑰匙是否存在
+    if ai_available:
+        st.success("✅ API Key 已載入")
+        # 顯示 Key 的前 4 碼，讓你確認是不是新的
+        if current_key:
+            st.caption(f"Key 前四碼: {current_key[:4]}...")
+    else:
+        st.error("❌ 找不到 API Key")
+        st.info("請檢查 Streamlit Cloud 的 Secrets 設定。")
+
+    st.divider()
+    
+    # 2. 手動連線測試
+    if st.button("🛠️ 測試 AI 連線"):
+        if ai_available:
+            with st.spinner("正在呼叫 Google Gemini..."):
+                success, msg = ask_ai_test()
+                if success:
+                    st.success("🎉 連線成功！AI 活著！")
+                    st.caption(f"回應: {msg}")
+                else:
+                    st.error("💀 連線失敗")
+                    st.code(msg, language="text") # 顯示詳細錯誤代碼
+        else:
+            st.warning("請先設定 API Key")
+    
+    st.divider()
 
 tab1, tab2, tab3 = st.tabs(["🔍 個股行情", "📡 鑽石掃描", "📊 我的資產"])
 
@@ -237,96 +273,69 @@ with tab1:
         change = curr_price - prev_close
         pct_change = (change / prev_close) * 100
         
-        # 計算技術指標
         hist['MA60_Line'] = hist['Close'].rolling(window=60).mean()
         ma60_val = hist['MA60_Line'].iloc[-1]
         vol_avg = hist['Volume'].rolling(window=5).mean().iloc[-1]
-        
         hist = calculate_kd(hist)
         k_val = hist['K'].iloc[-1]
         d_val = hist['D'].iloc[-1]
-        
-        # 計算戰力分數 (0-100)
         power_score = calculate_score(curr_price, ma60_val, k_val, d_val, hist['Volume'].iloc[-1], vol_avg)
         
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60_val)
 
-        # AI 自動分析
-        if ai_available:
-            tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
-            if curr_price > ma60_val: tech_text += "股價在季線上(強)。"
-            else: tech_text += "股價在季線下(弱)。"
-            info_text = f"EPS{eps}, ROE{roe}, 殖利率{yield_val}。"
-            
-            with st.status("🤖 AI 正在掃描全場數據...", expanded=True) as status:
-                st.write("📈 讀取技術指標...")
-                ai_comment = ask_ai_single(target_id, target_name, info_text, tech_text)
-                status.update(label="✅ 分析完成", state="complete", expanded=True)
-                st.info(f"💡 **AI 觀點**：\n\n{ai_comment}")
-
+        # 改回手動按鈕，避免自動掃描導致塞車
         st.markdown(f"## {target_name} ({target_id})")
         
-        # === V8.9 新增：儀表板與六宮格 ===
+        # 儀表板區
         c1, c2 = st.columns([1, 1])
-        
-        # 左邊：多空儀表板
         with c1:
             fig_gauge = go.Figure(go.Indicator(
-                mode = "gauge+number",
-                value = power_score,
-                domain = {'x': [0, 1], 'y': [0, 1]},
+                mode = "gauge+number", value = power_score, domain = {'x': [0, 1], 'y': [0, 1]},
                 title = {'text': "多空戰力指數"},
-                gauge = {
-                    'axis': {'range': [0, 100]},
-                    'bar': {'color': "darkblue"},
-                    'steps': [
-                        {'range': [0, 40], 'color': "lightgreen"},
-                        {'range': [40, 60], 'color': "lightgray"},
-                        {'range': [60, 100], 'color': "salmon"}],
-                    'threshold': {
-                        'line': {'color': "red", 'width': 4},
-                        'thickness': 0.75,
-                        'value': power_score}}))
+                gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "darkblue"},
+                    'steps': [{'range': [0, 40], 'color': "lightgreen"}, {'range': [40, 60], 'color': "lightgray"}, {'range': [60, 100], 'color': "salmon"}],
+                    'threshold': {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': power_score}}))
             fig_gauge.update_layout(height=250, margin=dict(l=10, r=10, t=30, b=10))
             st.plotly_chart(fig_gauge, use_container_width=True)
 
-        # 右邊：六宮格體檢
         with c2:
             st.subheader("🏥 六宮格體檢")
             g1, g2, g3 = st.columns(3)
             g4, g5, g6 = st.columns(3)
-            
-            # 1. 趨勢
             if curr_price > ma60_val: g1.metric("趨勢", "多頭", "季線上")
             else: g1.metric("趨勢", "空頭", "季線下", delta_color="inverse")
-            
-            # 2. 籌碼 (量能)
             if hist['Volume'].iloc[-1] > vol_avg: g2.metric("量能", "爆量", "大於均量")
             else: g2.metric("量能", "縮量", "小於均量", delta_color="off")
-            
-            # 3. 熱度 (KD)
             if k_val > 80: g3.metric("熱度", "過熱", f"K={k_val:.0f}", delta_color="inverse")
             elif k_val < 20: g3.metric("熱度", "超賣", f"K={k_val:.0f}")
             else: g3.metric("熱度", "正常", f"K={k_val:.0f}", delta_color="off")
-            
-            # 4. 估值 (PE)
             pe = info.get('trailingPE', 0)
             if pe is None: pe = 0
             if pe > 0 and pe < 15: g4.metric("估值", "便宜", f"PE={pe:.1f}")
             elif pe > 25: g4.metric("估值", "昂貴", f"PE={pe:.1f}", delta_color="inverse")
             else: g4.metric("估值", "合理", f"PE={pe:.1f}", delta_color="off")
-            
-            # 5. 股息
             if yield_val > 0.05: g5.metric("股息", "高息", f"{yield_val*100:.1f}%")
             else: g5.metric("股息", "一般", f"{yield_val*100:.1f}%", delta_color="off")
-            
-            # 6. 動能
             if pct_change > 0: g6.metric("動能", "強", f"{pct_change:.1f}%")
             else: g6.metric("動能", "弱", f"{pct_change:.1f}%", delta_color="inverse")
 
         st.divider()
+        
+        # AI 按鈕區
+        if st.button(f"🤖 呼叫 AI 分析 {target_name} (請點我)"):
+            if ai_available:
+                tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
+                if curr_price > ma60_val: tech_text += "股價在季線上(強)。"
+                else: tech_text += "股價在季線下(弱)。"
+                info_text = f"EPS{eps}, ROE{roe}, 殖利率{yield_val}。"
+                
+                with st.spinner("AI 分析中..."):
+                    ai_comment = ask_ai_single(target_id, target_name, info_text, tech_text)
+                    st.info(f"💡 **AI 觀點**：\n\n{ai_comment}")
+            else:
+                st.error("請先在側邊欄檢查 AI 連線")
 
-        # 繪圖
+        # 繪圖區
         st.subheader("📈 技術分析")
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.2, 0.2])
         fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
@@ -353,7 +362,7 @@ with tab1:
         
     else: st.warning("查無資料")
 
-# --- Tab 2: 鑽石掃描 ---
+# --- Tab 2 & 3: 保持原樣 ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     if st.button("⚡ 開始掃描", type="primary"):
@@ -386,7 +395,6 @@ with tab2:
                     st.divider()
         else: st.info("無符合結果")
 
-# --- Tab 3: 我的資產 ---
 with tab3:
     with st.sidebar:
         st.header("📝 交易登記")
