@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import yfinance as yf
-import requests # 使用 HTTP 直接連線
+import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
@@ -10,22 +10,19 @@ import time
 import random
 
 # ==========================================
-# 1. 設定與 AI 獵人 (核心修復)
+# 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 戰情室 V10.0 (終極獵人版)", layout="wide")
+st.set_page_config(page_title="AI 戰情室 V10.1 (8B 救生圈版)", layout="wide")
 
-# 🟢 候選模型清單 (包含最新的實驗版)
-# 獵人會從上往下試，找到第一個活著的就用它
+# 🟢 新增 'gemini-1.5-flash-8b' 到最優先！
+# 它的額度通常最高，最不容易 429
 CANDIDATE_MODELS = [
+    'gemini-1.5-flash-8b',       # 👈 王牌救生圈
     'gemini-1.5-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-flash-001',
-    'gemini-2.0-flash-exp',  # 新版實驗
+    'gemini-2.0-flash-exp',      # 如果有額度就用
+    'gemini-2.5-flash',
     'gemini-1.5-pro',
-    'gemini-1.5-pro-latest',
-    'gemini-1.0-pro',
-    'gemini-pro',
-    'gemini-2.5-flash'       # 最後手段
+    'gemini-pro'
 ]
 
 def init_key():
@@ -44,7 +41,7 @@ def init_key():
 
 API_KEY = init_key()
 
-# 🟢 AI 獵人：找出唯一可用的模型
+# 🟢 AI 獵人 (含重試機制)
 @st.cache_resource(show_spinner=False)
 def hunt_for_working_model(api_key):
     if not api_key: return None, "無 Key"
@@ -58,15 +55,15 @@ def hunt_for_working_model(api_key):
     for model in CANDIDATE_MODELS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         try:
-            # 設定短超時，快速掃描
-            response = requests.post(url, headers=headers, params=params, json=data, timeout=3)
+            # 嘗試連線
+            response = requests.post(url, headers=headers, params=params, json=data, timeout=5)
             
             if response.status_code == 200:
-                return model, f"✅ 鎖定模型: {model}"
+                return model, f"✅ 成功鎖定: {model}"
             elif response.status_code == 429:
-                logs.append(f"{model}: 額度滿 (429)")
+                logs.append(f"{model}: 額度滿 (429) - 跳過")
             elif response.status_code == 404:
-                logs.append(f"{model}: 找不到 (404)")
+                logs.append(f"{model}: 找不到 (404) - 跳過")
             else:
                 logs.append(f"{model}: 錯誤 {response.status_code}")
                 
@@ -74,7 +71,7 @@ def hunt_for_working_model(api_key):
             logs.append(f"{model}: 連線失敗")
             continue
             
-    return None, "所有模型皆無法使用。\n" + "\n".join(logs)
+    return None, "😭 全軍覆沒。請看日誌：\n" + "\n".join(logs)
 
 # 啟動獵人
 if API_KEY:
@@ -88,7 +85,7 @@ else:
 DATA_FILE = "trade_history.csv"
 
 # ==========================================
-# 2. 資料與工具 (修復新聞與語法錯誤)
+# 2. 資料與工具
 # ==========================================
 STOCK_MAP = {
     "台積電": "2330.TW", "鴻海": "2317.TW", "聯發科": "2454.TW", 
@@ -136,14 +133,12 @@ def get_stock_detail(ticker):
         return None, None, None
 
 def get_stock_news(ticker):
-    """修復版：嚴格過濾無標題新聞"""
     try:
         stock = yf.Ticker(ticker)
         raw_news = stock.news
         valid_news = []
         if raw_news:
             for n in raw_news:
-                # 嚴格檢查：必須有 title 且不為空
                 if n.get('title') and n.get('link'):
                     valid_news.append(n)
         return valid_news[:3]
@@ -207,7 +202,7 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心 (使用獵人找到的 BEST_MODEL)
+# 3. AI 核心 (使用 requests 並加入 Retry)
 # ==========================================
 def call_gemini_direct(prompt, api_key, model_name):
     if not api_key: return "無 API Key"
@@ -215,30 +210,34 @@ def call_gemini_direct(prompt, api_key, model_name):
     
     headers = {'Content-Type': 'application/json'}
     params = {'key': api_key}
-    data = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
-    
+    data = {"contents": [{"parts": [{"text": prompt}]}]}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     
-    try:
-        response = requests.post(url, headers=headers, params=params, json=data, timeout=15)
-        
-        if response.status_code == 200:
-            result = response.json()
-            try:
-                return result['candidates'][0]['content']['parts'][0]['text']
-            except:
-                return "AI 回傳格式異常"
-        elif response.status_code == 429:
-            return "⛔ 額度用盡 (請休息 1 分鐘)"
-        elif response.status_code == 404:
-            return f"🚫 模型 {model_name} 突然失聯 (404)"
-        else:
-            return f"🚫 連線錯誤: {response.status_code}"
+    # 🔁 重試機制：最多試 3 次
+    for attempt in range(3):
+        try:
+            response = requests.post(url, headers=headers, params=params, json=data, timeout=15)
             
-    except Exception as e:
-        return f"🚫 網路錯誤: {str(e)}"
+            if response.status_code == 200:
+                result = response.json()
+                try:
+                    return result['candidates'][0]['content']['parts'][0]['text']
+                except:
+                    return "AI 思考完畢，但格式怪怪的"
+            elif response.status_code == 429:
+                # 如果額度滿，休息 2 秒再試
+                time.sleep(2)
+                continue 
+            elif response.status_code == 404:
+                return f"🚫 模型 {model_name} 突然失聯 (404)"
+            else:
+                return f"🚫 連線錯誤: {response.status_code}"
+                
+        except Exception as e:
+            time.sleep(1)
+            continue
+
+    return "⛔ 系統繁忙 (429)，請休息 1 分鐘後再試。"
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str, tech_str):
@@ -266,17 +265,20 @@ def ask_ai_todo_list(portfolio_status_str):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 操盤手戰情室 V10.0 (終極獵人版)")
+st.title("📱 AI 操盤手戰情室 V10.1 (8B 救生圈版)")
 
-# --- 側邊欄：系統診斷區 (重點檢查！) ---
+# --- 側邊欄：系統診斷區 ---
 with st.sidebar:
     st.header("🚑 系統診斷室")
     if AI_AVAILABLE:
-        st.success(f"✅ 獵人已鎖定目標：\n{BEST_MODEL}")
+        st.success(f"✅ 獵人鎖定：{BEST_MODEL}")
+        st.caption("這是目前唯一可用的模型")
     else:
-        st.error("❌ 找不到可用模型")
-        with st.expander("查看獵人日誌 (Debug)"):
+        st.error("❌ 全軍覆沒")
+        with st.expander("查看死因 (Debug)"):
             st.text(HUNT_LOG)
+        
+        st.warning("建議：\n1. 換一個新的 Google 帳號申請 Key\n2. 等待明天額度重置")
 
     st.divider()
     
@@ -284,14 +286,14 @@ with st.sidebar:
         if AI_AVAILABLE:
             with st.spinner(f"正在連線 {BEST_MODEL}..."):
                 msg = call_gemini_direct("Hello", API_KEY, BEST_MODEL)
-                if "錯誤" not in msg and "用盡" not in msg:
+                if "錯誤" not in msg and "繁忙" not in msg:
                     st.success("🎉 連線成功！")
                     st.write(msg)
                 else:
                     st.error("💀 連線失敗")
                     st.write(msg)
         else:
-            st.warning("請先設定 API Key 或檢查日誌")
+            st.warning("無可用模型")
     
     st.divider()
 
@@ -369,7 +371,7 @@ with tab1:
                 else: tech_text += "股價在季線下(弱)。"
                 info_text = f"EPS{eps}, ROE{roe}, 殖利率{yield_val}。"
                 
-                with st.spinner("AI 分析中..."):
+                with st.spinner(f"AI ({BEST_MODEL}) 分析中..."):
                     ai_comment = ask_ai_single(target_id, target_name, info_text, tech_text)
                     st.info(f"💡 **AI 觀點**：\n\n{ai_comment}")
             else:
@@ -400,7 +402,7 @@ with tab1:
         
     else: st.warning("查無資料")
 
-# --- Tab 2: 鑽石掃描 (修復 NameError) ---
+# --- Tab 2: 鑽石掃描 ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     if st.button("⚡ 開始掃描", type="primary"):
@@ -425,7 +427,6 @@ with tab2:
             df_res = pd.DataFrame(report).sort_values("是鑽石嗎", ascending=False)
             for _, row in df_res.iterrows():
                 with st.container():
-                    # 🔴 這裡修復了截圖 1 的錯誤
                     c1, c2, c3 = st.columns([1.5, 2, 2])
                     title = f"💎 {row['名稱']} ({row['代號']})" if row['是鑽石嗎'] else f"{row['名稱']} ({row['代號']})"
                     c1.markdown(f"### {title}")
