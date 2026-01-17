@@ -13,7 +13,7 @@ import random
 # ==========================================
 # 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 戰情室 V16.0 (貼身家教版)", layout="wide")
+st.set_page_config(page_title="AI 戰情室 V17.0 (板塊雷達版)", layout="wide")
 
 # 🟢 獵人名單
 CANDIDATE_MODELS = [
@@ -77,22 +77,42 @@ AI_AVAILABLE = True if AUTO_MODEL else False
 DATA_FILE = "trade_history.csv"
 
 # ==========================================
-# 2. 資料與工具
+# 2. 資料與工具 (V17.0 大幅擴充股票池)
 # ==========================================
-STOCK_MAP = {
-    "台積電": "2330.TW", "鴻海": "2317.TW", "聯發科": "2454.TW", 
-    "台達電": "2308.TW", "聯電": "2303.TW", "廣達": "2382.TW", 
-    "緯創": "3231.TW", "緯穎": "6669.TW", "技嘉": "2376.TW",
-    "華碩": "2357.TW", "宏碁": "2353.TW", "光寶科": "2301.TW",
-    "富邦金": "2881.TW", "國泰金": "2882.TW", "中信金": "2891.TW", 
-    "兆豐金": "2886.TW", "玉山金": "2884.TW", "元大金": "2885.TW", 
-    "中鋼": "2002.TW", "長榮": "2603.TW", "陽明": "2609.TW", "萬海": "2615.TW",
-    "中華電": "2412.TW", "0050": "0050.TW", "0056": "0056.TW", 
-    "00878": "00878.TW", "00929": "00929.TW", "00940": "00940.TW"
+
+# 🟢 分類股票池
+SECTOR_MAP = {
+    "🔥 熱門權值股": {
+        "台積電": "2330.TW", "鴻海": "2317.TW", "聯發科": "2454.TW", "中華電": "2412.TW", "台達電": "2308.TW"
+    },
+    "💻 半導體/電子": {
+        "聯電": "2303.TW", "日月光": "3711.TW", "瑞昱": "2379.TW", "聯詠": "3034.TW", "大立光": "3008.TW",
+        "國巨": "2327.TW", "研華": "2395.TW", "華碩": "2357.TW", "宏碁": "2353.TW"
+    },
+    "🤖 AI 伺服器": {
+        "廣達": "2382.TW", "緯創": "3231.TW", "緯穎": "6669.TW", "技嘉": "2376.TW", "光寶科": "2301.TW",
+        "英業達": "2356.TW", "仁寶": "2324.TW", "奇鋐": "3017.TW"
+    },
+    "🏦 金融存股": {
+        "富邦金": "2881.TW", "國泰金": "2882.TW", "中信金": "2891.TW", "兆豐金": "2886.TW", "玉山金": "2884.TW",
+        "元大金": "2885.TW", "第一金": "2892.TW", "合庫金": "5880.TW", "華南金": "2880.TW"
+    },
+    "🚢 傳產/航運": {
+        "長榮": "2603.TW", "陽明": "2609.TW", "萬海": "2615.TW", "長榮航": "2618.TW", "華航": "2610.TW",
+        "中鋼": "2002.TW", "台塑": "1301.TW", "南亞": "1303.TW", "統一": "1216.TW"
+    },
+    "💰 熱門 ETF": {
+        "0050 元大台灣50": "0050.TW", "0056 元大高股息": "0056.TW", "00878 國泰永續": "00878.TW",
+        "00929 復華科技": "00929.TW", "00940 元大價值": "00940.TW", "006208 富邦台50": "006208.TW"
+    }
 }
 
+# 整合所有股票到大字典，供查詢使用
+STOCK_MAP = {}
+for sector, stocks in SECTOR_MAP.items():
+    STOCK_MAP.update(stocks)
+
 TICKER_TO_NAME = {v: k for k, v in STOCK_MAP.items()}
-WATCHLIST = ["2330.TW", "2317.TW", "2454.TW", "2603.TW", "2891.TW", "00878.TW"]
 
 def smart_stock_parser(user_input):
     user_input = user_input.strip()
@@ -166,7 +186,6 @@ def calculate_indicators(df):
     df['MA5'] = df['Close'].rolling(window=5).mean()
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA60_Line'] = df['Close'].rolling(window=60).mean()
-    
     return df
 
 def calculate_score(price, ma60, k, d, vol, vol_avg):
@@ -208,7 +227,25 @@ def evaluate_stock(info, price, ma60):
 
     return badges, is_diamond, status_text, eps, yield_val, roe
 
-# 🟢 V14.0 回測引擎
+def get_beginner_advice(price, ma60, k, d):
+    advice = {
+        "status": "", "hold_strategy": "", "empty_strategy": "", "reason": ""
+    }
+    if price > ma60:
+        advice["status"] = "多頭 (強勢) 🔥"
+        advice["reason"] = "股價站在橘色季線之上，代表長期趨勢向上。"
+        advice["hold_strategy"] = "✅ 續抱：趨勢沒變，就繼續抱著讓獲利奔跑。"
+        if k > 80: advice["empty_strategy"] = "⛔ 暫停買進：現在過熱了 (KD>80)，買了容易套牢，等回檔再說。"
+        elif k < 50 and k > d: advice["empty_strategy"] = "🎯 可以進場：趨勢向上且 KD 黃金交叉，是好買點。"
+        else: advice["empty_strategy"] = "👀 觀察：雖然趨勢好，但沒出現強力訊號，可分批買一點。"
+    else:
+        advice["status"] = "空頭 (弱勢) ❄️"
+        advice["reason"] = "股價跌破橘色季線，代表長期趨勢向下。"
+        advice["hold_strategy"] = "⚠️ 減碼/停損：趨勢轉弱，建議先賣出一部分保護本金。"
+        if k < 20 and k > d: advice["empty_strategy"] = "💎 搶反彈：股價超跌 (KD<20) 且黃金交叉，適合短線搶一下。"
+        else: advice["empty_strategy"] = "✋ 綁手觀望：別接掉下來的刀子，等站回季線再說。"
+    return advice
+
 def run_backtest(df, strategy_type="KD"):
     capital = 100000
     shares = 0
@@ -259,7 +296,6 @@ def run_backtest(df, strategy_type="KD"):
     win_rate = (win_count / trade_count * 100) if trade_count > 0 else 0
     return return_rate, win_rate, trade_count
 
-# 🟢 V16.0 升級：智慧建議 + 術語翻譯 + 執行步驟
 def get_smart_advice_v16(df):
     ret_kd, _, _ = run_backtest(df, "KD")
     ret_ma, _, _ = run_backtest(df, "MA")
@@ -271,15 +307,12 @@ def get_smart_advice_v16(df):
     k_now = df['K'].iloc[-1]
     d_now = df['D'].iloc[-1]
 
-    # 1. 決定策略
     strategy_name = ""
     strategy_desc = ""
     
     if ret_ma >= ret_kd and ret_ma > 0:
         strategy_name = "🚀 均線趨勢策略 (Moving Average)"
         strategy_desc = "這檔股票一旦發動就是大波段，適合跟著趨勢走，不要隨便下車。"
-        
-        # 均線 SOP
         if price > ma5 and ma5 > ma20:
             action = "續抱 / 買進"
             sop = [
@@ -301,8 +334,6 @@ def get_smart_advice_v16(df):
     else:
         strategy_name = "📦 KD 震盪策略 (Stochastic)"
         strategy_desc = "這檔股票喜歡在一個箱子裡上下跑，適合低買高賣。"
-        
-        # KD SOP
         if k_now < 40 and k_now > d_now:
             action = "買進 (黃金交叉)"
             sop = [
@@ -385,7 +416,7 @@ def ask_ai_todo_list(portfolio_status_str, model_to_use):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 戰情室 V16.0 (貼身家教版)")
+st.title("📱 AI 戰情室 V17.0 (板塊雷達版)")
 
 with st.sidebar:
     st.header("🚑 系統診斷室")
@@ -432,7 +463,6 @@ with tab1:
     target_id = smart_stock_parser(q_stock)
     target_name = get_stock_name(target_id)
     
-    # 預設抓 2 年以確保回測數據足夠
     info, hist, dividends = get_stock_detail(target_id, period="2y") 
     
     if info and not hist.empty:
@@ -450,8 +480,7 @@ with tab1:
         
         power_score = calculate_score(curr_price, ma60_val, k_val, d_val, hist['Volume'].iloc[-1], vol_avg)
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60_val)
-
-        # 🟢 V16.0 核心：取得家教建議
+        
         best_strat, strategy_comment, action_signal, action_sop, ret_kd, ret_ma = get_smart_advice_v16(hist)
 
         st.markdown(f"## {target_name} ({target_id})")
@@ -468,7 +497,6 @@ with tab1:
             else: m_cap_str = f"{market_cap/1000000:.0f}百萬"
         else: m_cap_str = "N/A"
 
-        # 數據九宮格
         with st.container():
             c1, c2 = st.columns(2)
             c1.metric("現價", f"{curr_price:.1f}", f"{change:.1f}")
@@ -482,37 +510,27 @@ with tab1:
 
         st.divider()
 
-        # 🔥🔥🔥 V16.0：AI 貼身家教總結區 🔥🔥🔥
-        st.markdown("### 🎓 AI 貼身家教：手把手教你做")
-        
-        if "KD" in best_strat:
-            st.info(f"📌 **最佳戰術：{best_strat}** (歷史報酬 {ret_kd:.1f}%)")
-        elif "均線" in best_strat:
-            st.success(f"📌 **最佳戰術：{best_strat}** (歷史報酬 {ret_ma:.1f}%)")
-        else:
-            st.error(f"📌 **最佳戰術：{best_strat}**")
+        st.markdown("### 🎓 AI 貼身家教")
+        if "KD" in best_strat: st.info(f"📌 **最佳戰術：{best_strat}** (歷史報酬 {ret_kd:.1f}%)")
+        elif "均線" in best_strat: st.success(f"📌 **最佳戰術：{best_strat}** (歷史報酬 {ret_ma:.1f}%)")
+        else: st.error(f"📌 **最佳戰術：{best_strat}**")
             
         st.write(f"📝 **股性解說**：{strategy_comment}")
         st.markdown(f"### ⚡ **目前訊號：{action_signal}**")
         
-        # 🟢 手把手 SOP (重點升級！)
         with st.container():
             st.write("👇 **請依照以下步驟檢查 (SOP)：**")
-            for step in action_sop:
-                st.write(step)
+            for step in action_sop: st.write(step)
         
-        # 🟢 術語翻譯吐司 (新手友善)
-        with st.expander("📚 看不懂上面的術語？點我翻譯翻譯！"):
+        with st.expander("📚 點我翻譯術語"):
             st.markdown("""
-            * **沿 5 日線操作**：這是「飆股」的特徵。意思是只要股價還在 5 日均線上面，就代表它還想漲，千萬不要賣；一跌破就代表累了，要馬上跑。
-            * **黃金交叉**：好像「紅燈變綠燈」，短期的線往上衝過長期的線，代表漲勢開始了。
-            * **高檔鈍化**：好像「車速破錶」，雖然很危險，但代表動力超強。這時候不要亂放空，但也別亂追高，坐好扶穩。
-            * **回測**：就是「穿越時空」，用過去的股價來考試。如果這套方法在過去能賺錢，未來賺錢的機率也比較高。
+            * **沿 5 日線操作**：這是飆股特徵，只要股價在 5 日均線上面就續抱。
+            * **黃金交叉**：短線往上衝過長線，代表漲勢開始。
+            * **高檔鈍化**：指標過熱，但動力強，別亂放空。
             """)
 
         st.divider()
         
-        # AI 按鈕
         if st.button(f"🤖 呼叫 AI 深度分析 {target_name}"):
             if AI_READY:
                 tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
@@ -523,13 +541,11 @@ with tab1:
             else: st.error("AI 未連線")
 
         st.subheader("📈 技術分析")
-        
-        # 🟢 圖表教學
         with st.expander("👀 這個圖表怎麼看？"):
             st.markdown("""
-            1.  **K線 (紅綠棒)**：紅色代表當天漲，綠色代表跌。
-            2.  **橘色線 (季線)**：這是「生命線」。K棒在上面是好學生(多頭)，在下面是壞學生(空頭)。
-            3.  **紫色虛線 (Fibo)**：這是「地板」。股價跌到這裡通常會彈起來。
+            1.  **K線**：紅漲綠跌。
+            2.  **橘色線 (季線)**：生命線，線上多頭，線下空頭。
+            3.  **紫色虛線 (Fibo)**：地板支撐位。
             """)
 
         chart_type = st.radio("指標切換：", ["KD 指標", "MACD 指標", "布林通道"], horizontal=True)
@@ -579,27 +595,45 @@ with tab1:
         else: st.caption("無新聞")
     else: st.warning("查無資料")
 
-# --- Tab 2: 鑽石掃描 ---
+# --- Tab 2: 鑽石掃描 (V17.0 新增: 板塊選擇) ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
+    
+    # 🟢 V17.0 新增：選擇要掃描的板塊
+    sector_options = list(SECTOR_MAP.keys()) + ["我的自選 (Watchlist)"]
+    selected_sector = st.selectbox("請選擇掃描範圍：", sector_options)
+    
     if st.button("⚡ 開始掃描", type="primary"):
         report = []
-        scan_list = list(set(WATCHLIST))
-        if os.path.exists(DATA_FILE):
-            try:
-                df_inv = pd.read_csv(DATA_FILE)
-                scan_list += df_inv["代號"].unique().tolist()
-            except: pass
-        with st.spinner("尋找便宜好股..."):
-            for t in scan_list:
-                info, hist, _ = get_stock_detail(t)
+        
+        # 決定掃描名單
+        if selected_sector == "我的自選 (Watchlist)":
+            scan_list = list(set(WATCHLIST))
+            if os.path.exists(DATA_FILE):
+                try:
+                    df_inv = pd.read_csv(DATA_FILE)
+                    scan_list += df_inv["代號"].unique().tolist()
+                except: pass
+        else:
+            # 取得該板塊的所有股票代號
+            scan_list = list(SECTOR_MAP[selected_sector].values())
+
+        with st.spinner(f"正在掃描 {selected_sector} ..."):
+            progress_bar = st.progress(0)
+            for i, t in enumerate(scan_list):
+                info, hist, _ = get_stock_detail(t, period="1y") # 掃描只需 1 年數據比較快
                 if info and not hist.empty:
                     p = hist.iloc[-1]['Close']
                     m = hist['Close'].rolling(window=60).mean().iloc[-1]
                     badges, is_dia, status, _, _, _ = evaluate_stock(info, p, m)
                     name = get_stock_name(t)
+                    # 鑽石或便宜股才顯示
                     if is_dia or (m > p): 
                         report.append({"代號": t, "名稱": name, "現價": p, "狀態": status, "標籤": " ".join(badges), "是鑽石嗎": is_dia})
+                
+                # 更新進度條
+                progress_bar.progress((i + 1) / len(scan_list))
+                
         if report:
             df_res = pd.DataFrame(report).sort_values("是鑽石嗎", ascending=False)
             for _, row in df_res.iterrows():
@@ -610,9 +644,9 @@ with tab2:
                     c2.info(row['標籤'])
                     c3.write(row['狀態'])
                     st.divider()
-        else: st.info("無符合結果")
+        else: st.info("該板塊目前沒有符合「便宜」或「鑽石」條件的股票")
 
-# --- Tab 3: 我的資產 ---
+# --- Tab 3: 我的資產 (同上版) ---
 with tab3:
     with st.sidebar:
         st.header("📝 交易登記")
@@ -639,7 +673,6 @@ with tab3:
             holdings["現價"] = holdings["代號"].apply(get_stock_price)
             holdings["市值"] = holdings["現價"] * holdings["股數"]
             
-            # V12.0 功能：熱力圖
             holdings["報酬率"] = ((holdings["現價"] - holdings["成本"]) / holdings["成本"]) * 100
             
             total = holdings["市值"].sum()
