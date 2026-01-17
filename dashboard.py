@@ -12,7 +12,7 @@ import random
 # ==========================================
 # 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 戰情室 V11.1 (永不當機版)", layout="wide")
+st.set_page_config(page_title="AI 戰情室 V11.2 (全方位數據版)", layout="wide")
 
 # 🟢 獵人名單
 CANDIDATE_MODELS = [
@@ -208,7 +208,7 @@ def evaluate_stock(info, price, ma60):
 # 3. AI 核心 (含「代班 AI」邏輯)
 # ==========================================
 
-# 🟢 代班 AI：規則引擎 (Fallback Engine)
+# 🟢 代班 AI
 def mock_ai_analysis(ticker, name, price, ma60, k, d):
     trend = "多頭" if price > ma60 else "空頭"
     action = "觀望"
@@ -254,19 +254,16 @@ def call_gemini_direct(prompt, api_key, model_name):
         response = requests.post(url, headers=headers, params=params, json=data, timeout=10)
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
-        return None # 失敗回傳 None，觸發代班 AI
+        return None
     except:
         return None
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def ask_ai_single(ticker, stock_name, info_str, tech_str, model_to_use, price, ma60, k, d):
-    # 1. 嘗試真 AI
     if model_to_use:
         prompt = f"分析 {stock_name} ({ticker})。{tech_str}。請給建議：1.趨勢 2.操作 3.理由 (100字內)"
         res = call_gemini_direct(prompt, API_KEY, model_to_use)
         if res: return res
-    
-    # 2. 失敗則用代班 AI
     return mock_ai_analysis(ticker, stock_name, price, ma60, k, d)
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -274,12 +271,10 @@ def ask_ai_news(news_list, model_to_use):
     if not news_list: return ""
     titles = [n['title'] for n in news_list]
     titles_str = "\n".join(titles)
-    
     if model_to_use:
         prompt = f"新聞標題：{titles_str}。回答：1.氣氛 2.重點。"
         res = call_gemini_direct(prompt, API_KEY, model_to_use)
         if res: return f"🤖 {res}"
-        
     return "⚠️ (離線) 無法解讀新聞"
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -288,19 +283,16 @@ def ask_ai_todo_list(portfolio_status_str, model_to_use):
         prompt = f"庫存：{portfolio_status_str}。請給操作建議清單。"
         res = call_gemini_direct(prompt, API_KEY, model_to_use)
         if res: return res
-        
     return mock_todo_list(portfolio_status_str)
 
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 戰情室 V11.1 (永不當機版)")
+st.title("📱 AI 戰情室 V11.2 (全方位數據版)")
 
 with st.sidebar:
     st.header("🚑 系統診斷室")
     FINAL_MODEL = AUTO_MODEL
-    
-    # 手動覆蓋
     use_manual = st.checkbox("手動指定模型")
     if use_manual:
         manual_model = st.text_input("輸入模型名稱", "gemini-1.5-flash-002")
@@ -343,11 +335,47 @@ with tab1:
         k_val = hist['K'].iloc[-1]
         d_val = hist['D'].iloc[-1]
         power_score = calculate_score(curr_price, ma60_val, k_val, d_val, hist['Volume'].iloc[-1], vol_avg)
-        
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60_val)
 
+        # -------------------------------------------
+        # V11.2 新增：全方位數據儀表板
+        # -------------------------------------------
         st.markdown(f"## {target_name} ({target_id})")
         
+        # 準備數據 (防止 None 報錯)
+        def safe_get(dic, key, fmt="{:.2f}"):
+            val = dic.get(key)
+            if val is None: return "N/A"
+            try: return fmt.format(val)
+            except: return str(val)
+
+        # 格式化大數字
+        market_cap = info.get('marketCap')
+        if market_cap:
+            if market_cap > 100000000000: m_cap_str = f"{market_cap/100000000:.1f}億"
+            else: m_cap_str = f"{market_cap/1000000:.0f}百萬"
+        else: m_cap_str = "N/A"
+
+        with st.container():
+            # 第一排：價格與波段
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("現價", f"{curr_price:.1f}", f"{change:.1f}")
+            m2.metric("開盤", safe_get(info, 'open'))
+            m3.metric("最高/最低", f"{safe_get(info, 'dayHigh')} / {safe_get(info, 'dayLow')}", None)
+            m4.metric("52週波段", f"{safe_get(info, 'fiftyTwoWeekLow')} - {safe_get(info, 'fiftyTwoWeekHigh')}")
+            
+            st.divider()
+            
+            # 第二排：估值與基本面
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("本益比 (P/E)", safe_get(info, 'trailingPE'))
+            d2.metric("股價淨值比 (P/B)", safe_get(info, 'priceToBook'))
+            d3.metric("每股盈餘 (EPS)", safe_get(info, 'trailingEps'))
+            d4.metric("市值", m_cap_str)
+
+        st.divider()
+        # -------------------------------------------
+
         c1, c2 = st.columns([1, 1])
         with c1:
             fig_gauge = go.Figure(go.Indicator(
@@ -370,27 +398,27 @@ with tab1:
             if k_val > 80: g3.metric("熱度", "過熱", f"K={k_val:.0f}", delta_color="inverse")
             elif k_val < 20: g3.metric("熱度", "超賣", f"K={k_val:.0f}")
             else: g3.metric("熱度", "正常", f"K={k_val:.0f}", delta_color="off")
-            pe = info.get('trailingPE', 0)
-            if pe is None: pe = 0
-            if pe > 0 and pe < 15: g4.metric("估值", "便宜", f"PE={pe:.1f}")
-            elif pe > 25: g4.metric("估值", "昂貴", f"PE={pe:.1f}", delta_color="inverse")
-            else: g4.metric("估值", "合理", f"PE={pe:.1f}", delta_color="off")
+            
+            pe_val = info.get('trailingPE', 0)
+            if pe_val and pe_val > 0:
+                if pe_val < 15: g4.metric("估值", "便宜", f"PE={pe_val:.1f}")
+                elif pe_val > 25: g4.metric("估值", "昂貴", f"PE={pe_val:.1f}", delta_color="inverse")
+                else: g4.metric("估值", "合理", f"PE={pe_val:.1f}", delta_color="off")
+            else: g4.metric("估值", "N/A", "無獲利", delta_color="off")
+
             if yield_val > 0.05: g5.metric("股息", "高息", f"{yield_val*100:.1f}%")
             else: g5.metric("股息", "一般", f"{yield_val*100:.1f}%", delta_color="off")
             
-            # 動能 (最後一筆 vs 前一筆)
             if change > 0: g6.metric("動能", "強", f"{change:.1f}")
             else: g6.metric("動能", "弱", f"{change:.1f}", delta_color="inverse")
 
         st.divider()
         
-        # 🟢 AI 按鈕 (呼叫真 AI 或 代班 AI)
+        # 🟢 AI 按鈕
         if st.button(f"🤖 呼叫 AI 分析 {target_name}"):
             tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
             info_text = f"EPS{eps}, ROE{roe}, 殖利率{yield_val}。"
-            
             with st.spinner("分析中..."):
-                # 傳入 price, ma60, k, d 供代班 AI 使用
                 ai_comment = ask_ai_single(target_id, target_name, info_text, tech_text, FINAL_MODEL, curr_price, ma60_val, k_val, d_val)
                 st.info(f"💡 **分析觀點**：\n\n{ai_comment}")
 
@@ -519,7 +547,6 @@ with tab3:
                             status = f"- {t_name}: 成本{cost}, 現價{current_p:.1f}, 季線{ma60:.1f}, KD值{k_now:.1f}\n"
                             portfolio_status += status
                     
-                    # 嘗試真 AI，失敗用假 AI
                     todo_list = ask_ai_todo_list(portfolio_status, FINAL_MODEL)
                     st.success(todo_list)
         else: st.info("尚無庫存")
