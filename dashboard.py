@@ -6,14 +6,14 @@ import requests
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import random
 
 # ==========================================
 # 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 戰情室 V13.1 (回測升級版)", layout="wide")
+st.set_page_config(page_title="AI 戰情室 V14.0 (策略軍火庫版)", layout="wide")
 
 # 🟢 獵人名單
 CANDIDATE_MODELS = [
@@ -77,7 +77,7 @@ AI_AVAILABLE = True if AUTO_MODEL else False
 DATA_FILE = "trade_history.csv"
 
 # ==========================================
-# 2. 資料與工具 (新增: 可指定期間抓資料)
+# 2. 資料與工具
 # ==========================================
 STOCK_MAP = {
     "台積電": "2330.TW", "鴻海": "2317.TW", "聯發科": "2454.TW", 
@@ -138,6 +138,7 @@ def get_stock_news(ticker):
         return []
 
 def calculate_indicators(df):
+    # KD
     low_min = df['Low'].rolling(window=9).min()
     high_max = df['High'].rolling(window=9).max()
     df['RSV'] = 100 * (df['Close'] - low_min) / (high_max - low_min)
@@ -152,16 +153,23 @@ def calculate_indicators(df):
     df['K'] = k_list
     df['D'] = d_list
     
+    # MACD
     exp12 = df['Close'].ewm(span=12, adjust=False).mean()
     exp26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp12 - exp26
     df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['Hist'] = df['MACD'] - df['Signal']
     
+    # BB
     df['BB_Mid'] = df['Close'].rolling(window=20).mean()
     df['BB_Std'] = df['Close'].rolling(window=20).std()
     df['BB_Up'] = df['BB_Mid'] + (df['BB_Std'] * 2)
     df['BB_Low'] = df['BB_Mid'] - (df['BB_Std'] * 2)
+    
+    # MA (V14.0 新增)
+    df['MA5'] = df['Close'].rolling(window=5).mean()
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    
     return df
 
 def calculate_score(price, ma60, k, d, vol, vol_avg):
@@ -222,38 +230,53 @@ def get_beginner_advice(price, ma60, k, d):
         else: advice["empty_strategy"] = "✋ 綁手觀望：別接掉下來的刀子，等站回季線再說。"
     return advice
 
-def run_backtest(df):
+# 🟢 V14.0 升級：多策略回測引擎
+def run_backtest(df, strategy_type="KD"):
     capital = 100000
     shares = 0
     trade_count = 0
     win_count = 0
-    
     in_position = False
     buy_price = 0
     
     for i in range(1, len(df)):
-        k_curr = df['K'].iloc[i]
-        d_curr = df['D'].iloc[i]
-        k_prev = df['K'].iloc[i-1]
-        d_prev = df['D'].iloc[i-1]
         price = df['Close'].iloc[i]
+        signal_buy = False
+        signal_sell = False
         
-        # 買進
-        if not in_position and k_prev < d_prev and k_curr > d_curr and k_curr < 40:
+        # 策略 1: KD 震盪策略 (適合盤整盤)
+        if strategy_type == "KD (適合盤整)":
+            k_curr = df['K'].iloc[i]
+            d_curr = df['D'].iloc[i]
+            k_prev = df['K'].iloc[i-1]
+            d_prev = df['D'].iloc[i-1]
+            if k_prev < d_prev and k_curr > d_curr and k_curr < 40: signal_buy = True
+            elif k_prev > d_prev and k_curr < d_curr and k_curr > 60: signal_sell = True
+            
+        # 策略 2: 均線趨勢策略 (適合飆股)
+        elif strategy_type == "均線 (適合趨勢)":
+            ma5_curr = df['MA5'].iloc[i]
+            ma20_curr = df['MA20'].iloc[i]
+            ma5_prev = df['MA5'].iloc[i-1]
+            ma20_prev = df['MA20'].iloc[i-1]
+            # 黃金交叉買
+            if ma5_prev < ma20_prev and ma5_curr > ma20_curr: signal_buy = True
+            # 死亡交叉賣
+            elif ma5_prev > ma20_prev and ma5_curr < ma20_curr: signal_sell = True
+
+        # 執行交易
+        if not in_position and signal_buy:
             shares = capital / price
             buy_price = price
             in_position = True
             capital = 0
-            
-        # 賣出
-        elif in_position and k_prev > d_prev and k_curr < d_curr and k_curr > 60:
+        elif in_position and signal_sell:
             capital = shares * price
             if price > buy_price: win_count += 1
             shares = 0
             in_position = False
             trade_count += 1
             
-    # 如果最後還持有，算回現金
     if in_position:
         final_value = shares * df['Close'].iloc[-1]
     else:
@@ -261,7 +284,6 @@ def run_backtest(df):
         
     return_rate = ((final_value - 100000) / 100000) * 100
     win_rate = (win_count / trade_count * 100) if trade_count > 0 else 0
-    
     return return_rate, win_rate, trade_count
 
 # ==========================================
@@ -327,12 +349,11 @@ def ask_ai_todo_list(portfolio_status_str, model_to_use):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 戰情室 V13.1 (回測升級版)")
+st.title("📱 AI 戰情室 V14.0 (策略軍火庫版)")
 
 with st.sidebar:
     st.header("🚑 系統診斷室")
     FINAL_MODEL = AUTO_MODEL
-    
     use_manual = st.checkbox("手動指定模型")
     if use_manual:
         manual_model = st.text_input("輸入模型名稱", "gemini-1.5-flash-8b")
@@ -345,7 +366,6 @@ with st.sidebar:
         st.warning("⚠️ 啟用代班 AI 模式")
         AI_READY = False
         with st.expander("查看日誌"): st.text(HUNT_LOG)
-    
     st.divider()
     
     st.header("🦁 資金控管")
@@ -376,8 +396,7 @@ with tab1:
     target_id = smart_stock_parser(q_stock)
     target_name = get_stock_name(target_id)
     
-    # 🟢 V13.1 新增：回測區間選擇器
-    # 預設抓 1 年，但如果用戶想看更多，可以按按鈕觸發抓更多
+    # 預設抓 1 年數據，回測時再看需求
     info, hist, dividends = get_stock_detail(target_id, period="1y") 
     
     if info and not hist.empty:
@@ -440,36 +459,41 @@ with tab1:
             op_c1.warning(f"🖐️ **持有者**：\n\n{advice['hold_strategy']}")
             op_c2.success(f"🛒 **空手者**：\n\n{advice['empty_strategy']}")
 
-        # 🟢 V13.1 新增：可選時間的回測
-        with st.expander("⚡ 策略回測 (看看歷史勝率)", expanded=False):
+        # 🟢 V14.0 升級：多策略回測選擇器
+        with st.expander("⚡ 策略軍火庫：換個方法試試看？", expanded=False):
             
-            # 讓用戶選擇回測長度
-            backtest_period = st.selectbox("選擇回測時間長度：", ["1年 (最近)", "2年", "5年 (長期)"])
+            c_sel1, c_sel2 = st.columns(2)
             
-            if st.button("開始回測"):
+            with c_sel1:
+                backtest_period = st.selectbox("1. 選擇時間長度：", ["1年 (最近)", "2年", "5年 (長期)"])
+            with c_sel2:
+                # 這裡可以切換策略！
+                strategy_choice = st.selectbox("2. 選擇戰術：", ["KD (適合盤整)", "均線 (適合趨勢)"])
+            
+            if st.button("🚀 開始實戰模擬"):
                 period_map = {"1年 (最近)": "1y", "2年": "2y", "5年 (長期)": "5y"}
                 selected_p = period_map[backtest_period]
                 
-                with st.spinner(f"正在抓取過去 {backtest_period} 的數據進行模擬..."):
-                    # 重新抓取更長期的數據
+                with st.spinner(f"正在模擬 {strategy_choice} 策略..."):
+                    # 重新抓數據
                     _, long_hist, _ = get_stock_detail(target_id, period=selected_p)
                     if long_hist is not None and not long_hist.empty:
                         long_hist = calculate_indicators(long_hist)
-                        ret, win, trades = run_backtest(long_hist)
+                        
+                        # 傳入選擇的策略
+                        ret, win, trades = run_backtest(long_hist, strategy_type=strategy_choice)
                         
                         b1, b2, b3 = st.columns(3)
                         b1.metric("報酬率", f"{ret:.1f}%", delta_color="normal" if ret>0 else "inverse")
                         b2.metric("勝率", f"{win:.0f}%")
                         b3.metric("交易次數", f"{trades} 次")
                         
-                        if trades < 3:
-                            st.warning("⚠️ 交易次數太少，數據參考價值較低。")
-                        elif ret > 0: 
-                            st.success(f"結論：過去 {backtest_period} 這套策略是賺錢的！👍")
+                        if ret > 0: 
+                            st.success(f"讚喔！這檔股票很適合用「{strategy_choice}」來操作！")
                         else: 
-                            st.error(f"結論：過去 {backtest_period} 這套策略會賠錢，請小心！👎")
+                            st.error(f"慘！這檔股票不適合用「{strategy_choice}」，請換一個策略試試看。")
                     else:
-                        st.error("無法取得歷史數據")
+                        st.error("資料不足")
 
         st.divider()
         
@@ -530,10 +554,7 @@ with tab1:
         else: st.caption("無新聞")
     else: st.warning("查無資料")
 
-# --- Tab 2 & 3 省略以節省篇幅 (保持原樣) ---
-# ... (Tab 2 和 Tab 3 的程式碼與 V11.3 相同，請直接貼上) ...
-# 為了避免回覆過長，這裡省略 Tab 2 和 3 的重複程式碼。
-# 請務必把 V11.3 或 V12.0 的 Tab 2 和 Tab 3 補在後面！
+# --- Tab 2: 鑽石掃描 ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     if st.button("⚡ 開始掃描", type="primary"):
@@ -566,6 +587,7 @@ with tab2:
                     st.divider()
         else: st.info("無符合結果")
 
+# --- Tab 3: 我的資產 ---
 with tab3:
     with st.sidebar:
         st.header("📝 交易登記")
@@ -591,14 +613,16 @@ with tab3:
             holdings.insert(1, "名稱", holdings["代號"].apply(get_stock_name))
             holdings["現價"] = holdings["代號"].apply(get_stock_price)
             holdings["市值"] = holdings["現價"] * holdings["股數"]
+            
+            # V12.0 功能：熱力圖
+            holdings["報酬率"] = ((holdings["現價"] - holdings["成本"]) / holdings["成本"]) * 100
+            
             total = holdings["市值"].sum()
             profit = total - (holdings["成本"]*holdings["股數"]).sum()
             c1, c2 = st.columns(2)
             c1.metric("總資產", f"${total:,.0f}")
             c2.metric("總損益", f"${profit:,.0f}")
             
-            # V12.0 功能：熱力圖
-            holdings["報酬率"] = ((holdings["現價"] - holdings["成本"]) / holdings["成本"]) * 100
             st.subheader("🗺️ 庫存熱力圖")
             fig_map = px.treemap(holdings, path=['名稱'], values='市值', color='報酬率',
                                  color_continuous_scale='RdBu_r', color_continuous_midpoint=0)
