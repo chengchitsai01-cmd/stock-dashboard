@@ -13,7 +13,7 @@ import random
 # ==========================================
 # 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 戰情室 V14.0 (策略軍火庫版)", layout="wide")
+st.set_page_config(page_title="AI 戰情室 V15.0 (懶人軍師版)", layout="wide")
 
 # 🟢 獵人名單
 CANDIDATE_MODELS = [
@@ -114,7 +114,7 @@ def get_stock_price(ticker):
         return 0.0
 
 @st.cache_data(ttl=300)
-def get_stock_detail(ticker, period="1y"):
+def get_stock_detail(ticker, period="2y"):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
@@ -166,9 +166,10 @@ def calculate_indicators(df):
     df['BB_Up'] = df['BB_Mid'] + (df['BB_Std'] * 2)
     df['BB_Low'] = df['BB_Mid'] - (df['BB_Std'] * 2)
     
-    # MA (V14.0 新增)
+    # MA
     df['MA5'] = df['Close'].rolling(window=5).mean()
     df['MA20'] = df['Close'].rolling(window=20).mean()
+    df['MA60_Line'] = df['Close'].rolling(window=60).mean()
     
     return df
 
@@ -211,26 +212,7 @@ def evaluate_stock(info, price, ma60):
 
     return badges, is_diamond, status_text, eps, yield_val, roe
 
-def get_beginner_advice(price, ma60, k, d):
-    advice = {
-        "status": "", "hold_strategy": "", "empty_strategy": "", "reason": ""
-    }
-    if price > ma60:
-        advice["status"] = "多頭 (強勢) 🔥"
-        advice["reason"] = "股價站在橘色季線之上，代表長期趨勢向上。"
-        advice["hold_strategy"] = "✅ 續抱：趨勢沒變，就繼續抱著讓獲利奔跑。"
-        if k > 80: advice["empty_strategy"] = "⛔ 暫停買進：現在過熱了 (KD>80)，買了容易套牢，等回檔再說。"
-        elif k < 50 and k > d: advice["empty_strategy"] = "🎯 可以進場：趨勢向上且 KD 黃金交叉，是好買點。"
-        else: advice["empty_strategy"] = "👀 觀察：雖然趨勢好，但沒出現強力訊號，可分批買一點。"
-    else:
-        advice["status"] = "空頭 (弱勢) ❄️"
-        advice["reason"] = "股價跌破橘色季線，代表長期趨勢向下。"
-        advice["hold_strategy"] = "⚠️ 減碼/停損：趨勢轉弱，建議先賣出一部分保護本金。"
-        if k < 20 and k > d: advice["empty_strategy"] = "💎 搶反彈：股價超跌 (KD<20) 且黃金交叉，適合短線搶一下。"
-        else: advice["empty_strategy"] = "✋ 綁手觀望：別接掉下來的刀子，等站回季線再說。"
-    return advice
-
-# 🟢 V14.0 升級：多策略回測引擎
+# 🟢 V14.0 回測引擎
 def run_backtest(df, strategy_type="KD"):
     capital = 100000
     shares = 0
@@ -244,27 +226,26 @@ def run_backtest(df, strategy_type="KD"):
         signal_buy = False
         signal_sell = False
         
-        # 策略 1: KD 震盪策略 (適合盤整盤)
-        if strategy_type == "KD (適合盤整)":
+        # KD 策略
+        if strategy_type == "KD":
             k_curr = df['K'].iloc[i]
             d_curr = df['D'].iloc[i]
             k_prev = df['K'].iloc[i-1]
             d_prev = df['D'].iloc[i-1]
+            # 黃金交叉且低檔
             if k_prev < d_prev and k_curr > d_curr and k_curr < 40: signal_buy = True
+            # 死亡交叉且高檔
             elif k_prev > d_prev and k_curr < d_curr and k_curr > 60: signal_sell = True
             
-        # 策略 2: 均線趨勢策略 (適合飆股)
-        elif strategy_type == "均線 (適合趨勢)":
+        # 均線策略
+        elif strategy_type == "MA":
             ma5_curr = df['MA5'].iloc[i]
             ma20_curr = df['MA20'].iloc[i]
             ma5_prev = df['MA5'].iloc[i-1]
             ma20_prev = df['MA20'].iloc[i-1]
-            # 黃金交叉買
             if ma5_prev < ma20_prev and ma5_curr > ma20_curr: signal_buy = True
-            # 死亡交叉賣
             elif ma5_prev > ma20_prev and ma5_curr < ma20_curr: signal_sell = True
 
-        # 執行交易
         if not in_position and signal_buy:
             shares = capital / price
             buy_price = price
@@ -286,24 +267,71 @@ def run_backtest(df, strategy_type="KD"):
     win_rate = (win_count / trade_count * 100) if trade_count > 0 else 0
     return return_rate, win_rate, trade_count
 
+# 🟢 V15.0 懶人軍師：自動比較並給出建議
+def get_smart_advice(df):
+    # 1. 自動跑兩種回測
+    ret_kd, win_kd, _ = run_backtest(df, "KD")
+    ret_ma, win_ma, _ = run_backtest(df, "MA")
+    
+    # 2. 判斷誰贏
+    best_strategy = ""
+    comment = ""
+    warning = ""
+    
+    if ret_kd > ret_ma and ret_kd > 0:
+        best_strategy = "KD 震盪策略 (適合盤整)"
+        comment = "這檔股票股性比較黏，適合用 KD 低買高賣。"
+        
+        # 檢查現在 KD 狀態
+        k_now = df['K'].iloc[-1]
+        d_now = df['D'].iloc[-1]
+        if k_now < 40 and k_now > d_now:
+            warning = "🔥 **現在就是 KD 黃金交叉買點！機會難得！**"
+        elif k_now > 80:
+            warning = "⛔ 現在 KD 過高，千萬別追，等回檔。"
+        else:
+            warning = "😴 目前沒訊號，空手者請觀望。"
+            
+    elif ret_ma > ret_kd and ret_ma > 0:
+        best_strategy = "均線 趨勢策略 (適合波段)"
+        comment = "這檔股票一旦發動就是大波段，適合用均線操作。"
+        
+        # 檢查現在 MA 狀態
+        ma5 = df['MA5'].iloc[-1]
+        ma20 = df['MA20'].iloc[-1]
+        price = df['Close'].iloc[-1]
+        
+        if ma5 > ma20 and price > ma5:
+            warning = "🚀 **現在是多頭排列，可沿著 5 日線操作！**"
+        elif ma5 < ma20:
+            warning = "❄️ 現在是空頭排列，請空手觀望。"
+        else:
+            warning = "👀 均線糾結中，等待方向突破。"
+            
+    else:
+        best_strategy = "都不適合 (建議換一檔)"
+        comment = "KD 和均線回測績效都很差，這檔股票可能很難搞 (妖股或死魚)。"
+        warning = "💀 **建議不要浪費時間在這檔股票上。**"
+
+    return best_strategy, comment, warning, ret_kd, ret_ma
+
 # ==========================================
 # 3. AI 核心
 # ==========================================
 def mock_ai_analysis(ticker, name, price, ma60, k, d):
     trend = "多頭" if price > ma60 else "空頭"
     action = "觀望"
-    reason = ""
     if trend == "多頭":
-        if k < 20: action, reason = "買進", "強勢回檔，KD超賣。"
-        elif k > 80: action, reason = "減碼", "短線過熱，注意風險。"
-        else: action, reason = "續抱", "趨勢健康，沿線操作。"
+        if k < 20: action = "買進"
+        elif k > 80: action = "減碼"
+        else: action = "續抱"
     else:
-        if k < 20: action, reason = "搶反彈", "乖離過大，有反彈機會。"
-        else: action, reason = "空手", "季線之下不接刀。"
-    return f"(⚠️ 代班 AI)\n1. 趨勢：{trend}\n2. 建議：{action}\n3. 理由：{reason}"
+        if k < 20: action = "搶反彈"
+        else: action = "空手"
+    return f"(⚠️ 代班 AI)\n1. 趨勢：{trend}\n2. 建議：{action}\n3. 指標：K={k:.1f}"
 
 def mock_todo_list(portfolio_str):
-    return "(⚠️ 代班 AI) API 暫時無法使用，請以技術指標為準：季線之上續抱，跌破減碼。"
+    return "(⚠️ 代班 AI) 建議以季線為防守點，跌破季線減碼。"
 
 def call_gemini_direct(prompt, api_key, model_name):
     if not api_key: return None
@@ -349,7 +377,7 @@ def ask_ai_todo_list(portfolio_status_str, model_to_use):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 戰情室 V14.0 (策略軍火庫版)")
+st.title("📱 AI 戰情室 V15.0 (懶人軍師版)")
 
 with st.sidebar:
     st.header("🚑 系統診斷室")
@@ -396,8 +424,8 @@ with tab1:
     target_id = smart_stock_parser(q_stock)
     target_name = get_stock_name(target_id)
     
-    # 預設抓 1 年數據，回測時再看需求
-    info, hist, dividends = get_stock_detail(target_id, period="1y") 
+    # 預設抓 2 年以確保回測數據足夠
+    info, hist, dividends = get_stock_detail(target_id, period="2y") 
     
     if info and not hist.empty:
         curr_price = info.get('currentPrice', hist.iloc[-1]['Close'])
@@ -412,9 +440,11 @@ with tab1:
         k_val = hist['K'].iloc[-1]
         d_val = hist['D'].iloc[-1]
         
-        advice = get_beginner_advice(curr_price, ma60_val, k_val, d_val)
         power_score = calculate_score(curr_price, ma60_val, k_val, d_val, hist['Volume'].iloc[-1], vol_avg)
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60_val)
+
+        # 🟢 V15.0 核心：生成懶人總結
+        best_strat, strategy_comment, action_warning, ret_kd, ret_ma = get_smart_advice(hist)
 
         st.markdown(f"## {target_name} ({target_id})")
         
@@ -430,6 +460,7 @@ with tab1:
             else: m_cap_str = f"{market_cap/1000000:.0f}百萬"
         else: m_cap_str = "N/A"
 
+        # 數據九宮格
         with st.container():
             c1, c2 = st.columns(2)
             c1.metric("現價", f"{curr_price:.1f}", f"{change:.1f}")
@@ -443,60 +474,29 @@ with tab1:
 
         st.divider()
 
-        st.subheader("🧭 新手導航")
-        g_col, t_col = st.columns([1, 2])
-        with g_col:
-            fig_gauge = go.Figure(go.Indicator(
-                mode = "gauge+number", value = power_score, title = {'text': "多空指數"},
-                gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "darkblue"},
-                    'steps': [{'range': [0, 40], 'color': "lightgreen"}, {'range': [40, 60], 'color': "lightgray"}, {'range': [60, 100], 'color': "salmon"}]}))
-            fig_gauge.update_layout(height=200, margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig_gauge, use_container_width=True)
-        with t_col:
-            st.info(f"📊 **目前狀態**：{advice['status']}")
-            st.write(f"💡 **白話解讀**：{advice['reason']}")
-            op_c1, op_c2 = st.columns(2)
-            op_c1.warning(f"🖐️ **持有者**：\n\n{advice['hold_strategy']}")
-            op_c2.success(f"🛒 **空手者**：\n\n{advice['empty_strategy']}")
-
-        # 🟢 V14.0 升級：多策略回測選擇器
-        with st.expander("⚡ 策略軍火庫：換個方法試試看？", expanded=False):
+        # 🔥🔥🔥 V15.0 新增：AI 懶人總結區 🔥🔥🔥
+        st.markdown("### 🏆 AI 最終總結：這檔股票怎麼玩？")
+        
+        # 用不同顏色框框顯示重點
+        if "KD" in best_strat:
+            st.info(f"👉 **最佳策略：{best_strat}** (報酬率 {ret_kd:.1f}%)")
+        elif "均線" in best_strat:
+            st.success(f"👉 **最佳策略：{best_strat}** (報酬率 {ret_ma:.1f}%)")
+        else:
+            st.error(f"👉 **最佳策略：{best_strat}**")
             
-            c_sel1, c_sel2 = st.columns(2)
-            
-            with c_sel1:
-                backtest_period = st.selectbox("1. 選擇時間長度：", ["1年 (最近)", "2年", "5年 (長期)"])
-            with c_sel2:
-                # 這裡可以切換策略！
-                strategy_choice = st.selectbox("2. 選擇戰術：", ["KD (適合盤整)", "均線 (適合趨勢)"])
-            
-            if st.button("🚀 開始實戰模擬"):
-                period_map = {"1年 (最近)": "1y", "2年": "2y", "5年 (長期)": "5y"}
-                selected_p = period_map[backtest_period]
-                
-                with st.spinner(f"正在模擬 {strategy_choice} 策略..."):
-                    # 重新抓數據
-                    _, long_hist, _ = get_stock_detail(target_id, period=selected_p)
-                    if long_hist is not None and not long_hist.empty:
-                        long_hist = calculate_indicators(long_hist)
-                        
-                        # 傳入選擇的策略
-                        ret, win, trades = run_backtest(long_hist, strategy_type=strategy_choice)
-                        
-                        b1, b2, b3 = st.columns(3)
-                        b1.metric("報酬率", f"{ret:.1f}%", delta_color="normal" if ret>0 else "inverse")
-                        b2.metric("勝率", f"{win:.0f}%")
-                        b3.metric("交易次數", f"{trades} 次")
-                        
-                        if ret > 0: 
-                            st.success(f"讚喔！這檔股票很適合用「{strategy_choice}」來操作！")
-                        else: 
-                            st.error(f"慘！這檔股票不適合用「{strategy_choice}」，請換一個策略試試看。")
-                    else:
-                        st.error("資料不足")
+        st.write(f"📝 **股性分析**：{strategy_comment}")
+        st.markdown(f"### ⚡ **目前操作建議**：\n{action_warning}")
+        
+        with st.expander("查看詳細回測數據 (給想看細節的人)"):
+            c1, c2 = st.columns(2)
+            c1.metric("KD 策略報酬", f"{ret_kd:.1f}%")
+            c2.metric("均線 策略報酬", f"{ret_ma:.1f}%")
+            st.caption("註：回測數據基於過去 2 年股價模擬")
 
         st.divider()
         
+        # AI 按鈕
         if st.button(f"🤖 呼叫 AI 深度分析 {target_name}"):
             if AI_READY:
                 tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
@@ -554,7 +554,9 @@ with tab1:
         else: st.caption("無新聞")
     else: st.warning("查無資料")
 
-# --- Tab 2: 鑽石掃描 ---
+# --- Tab 2 & 3: 保持原樣 (省略以節省篇幅) ---
+# ... (請貼上之前 V12 或 V13 的 Tab 2 和 Tab 3 程式碼) ...
+# 注意：為了程式完整性，請務必補上 Tab 2 和 3 的程式碼！
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     if st.button("⚡ 開始掃描", type="primary"):
@@ -587,7 +589,6 @@ with tab2:
                     st.divider()
         else: st.info("無符合結果")
 
-# --- Tab 3: 我的資產 ---
 with tab3:
     with st.sidebar:
         st.header("📝 交易登記")
