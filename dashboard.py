@@ -13,7 +13,7 @@ import random
 # ==========================================
 # 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 戰情室 V15.0 (懶人軍師版)", layout="wide")
+st.set_page_config(page_title="AI 戰情室 V16.0 (貼身家教版)", layout="wide")
 
 # 🟢 獵人名單
 CANDIDATE_MODELS = [
@@ -138,7 +138,6 @@ def get_stock_news(ticker):
         return []
 
 def calculate_indicators(df):
-    # KD
     low_min = df['Low'].rolling(window=9).min()
     high_max = df['High'].rolling(window=9).max()
     df['RSV'] = 100 * (df['Close'] - low_min) / (high_max - low_min)
@@ -153,20 +152,17 @@ def calculate_indicators(df):
     df['K'] = k_list
     df['D'] = d_list
     
-    # MACD
     exp12 = df['Close'].ewm(span=12, adjust=False).mean()
     exp26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp12 - exp26
     df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['Hist'] = df['MACD'] - df['Signal']
     
-    # BB
     df['BB_Mid'] = df['Close'].rolling(window=20).mean()
     df['BB_Std'] = df['Close'].rolling(window=20).std()
     df['BB_Up'] = df['BB_Mid'] + (df['BB_Std'] * 2)
     df['BB_Low'] = df['BB_Mid'] - (df['BB_Std'] * 2)
     
-    # MA
     df['MA5'] = df['Close'].rolling(window=5).mean()
     df['MA20'] = df['Close'].rolling(window=20).mean()
     df['MA60_Line'] = df['Close'].rolling(window=60).mean()
@@ -226,18 +222,14 @@ def run_backtest(df, strategy_type="KD"):
         signal_buy = False
         signal_sell = False
         
-        # KD 策略
         if strategy_type == "KD":
             k_curr = df['K'].iloc[i]
             d_curr = df['D'].iloc[i]
             k_prev = df['K'].iloc[i-1]
             d_prev = df['D'].iloc[i-1]
-            # 黃金交叉且低檔
             if k_prev < d_prev and k_curr > d_curr and k_curr < 40: signal_buy = True
-            # 死亡交叉且高檔
             elif k_prev > d_prev and k_curr < d_curr and k_curr > 60: signal_sell = True
             
-        # 均線策略
         elif strategy_type == "MA":
             ma5_curr = df['MA5'].iloc[i]
             ma20_curr = df['MA20'].iloc[i]
@@ -267,53 +259,69 @@ def run_backtest(df, strategy_type="KD"):
     win_rate = (win_count / trade_count * 100) if trade_count > 0 else 0
     return return_rate, win_rate, trade_count
 
-# 🟢 V15.0 懶人軍師：自動比較並給出建議
-def get_smart_advice(df):
-    # 1. 自動跑兩種回測
-    ret_kd, win_kd, _ = run_backtest(df, "KD")
-    ret_ma, win_ma, _ = run_backtest(df, "MA")
+# 🟢 V16.0 升級：智慧建議 + 術語翻譯 + 執行步驟
+def get_smart_advice_v16(df):
+    ret_kd, _, _ = run_backtest(df, "KD")
+    ret_ma, _, _ = run_backtest(df, "MA")
     
-    # 2. 判斷誰贏
-    best_strategy = ""
-    comment = ""
-    warning = ""
-    
-    if ret_kd > ret_ma and ret_kd > 0:
-        best_strategy = "KD 震盪策略 (適合盤整)"
-        comment = "這檔股票股性比較黏，適合用 KD 低買高賣。"
-        
-        # 檢查現在 KD 狀態
-        k_now = df['K'].iloc[-1]
-        d_now = df['D'].iloc[-1]
-        if k_now < 40 and k_now > d_now:
-            warning = "🔥 **現在就是 KD 黃金交叉買點！機會難得！**"
-        elif k_now > 80:
-            warning = "⛔ 現在 KD 過高，千萬別追，等回檔。"
-        else:
-            warning = "😴 目前沒訊號，空手者請觀望。"
-            
-    elif ret_ma > ret_kd and ret_ma > 0:
-        best_strategy = "均線 趨勢策略 (適合波段)"
-        comment = "這檔股票一旦發動就是大波段，適合用均線操作。"
-        
-        # 檢查現在 MA 狀態
-        ma5 = df['MA5'].iloc[-1]
-        ma20 = df['MA20'].iloc[-1]
-        price = df['Close'].iloc[-1]
-        
-        if ma5 > ma20 and price > ma5:
-            warning = "🚀 **現在是多頭排列，可沿著 5 日線操作！**"
-        elif ma5 < ma20:
-            warning = "❄️ 現在是空頭排列，請空手觀望。"
-        else:
-            warning = "👀 均線糾結中，等待方向突破。"
-            
-    else:
-        best_strategy = "都不適合 (建議換一檔)"
-        comment = "KD 和均線回測績效都很差，這檔股票可能很難搞 (妖股或死魚)。"
-        warning = "💀 **建議不要浪費時間在這檔股票上。**"
+    ma5 = df['MA5'].iloc[-1]
+    ma20 = df['MA20'].iloc[-1]
+    ma60 = df['MA60_Line'].iloc[-1]
+    price = df['Close'].iloc[-1]
+    k_now = df['K'].iloc[-1]
+    d_now = df['D'].iloc[-1]
 
-    return best_strategy, comment, warning, ret_kd, ret_ma
+    # 1. 決定策略
+    strategy_name = ""
+    strategy_desc = ""
+    
+    if ret_ma >= ret_kd and ret_ma > 0:
+        strategy_name = "🚀 均線趨勢策略 (Moving Average)"
+        strategy_desc = "這檔股票一旦發動就是大波段，適合跟著趨勢走，不要隨便下車。"
+        
+        # 均線 SOP
+        if price > ma5 and ma5 > ma20:
+            action = "續抱 / 買進"
+            sop = [
+                f"✅ **檢查趨勢**：股價({price:.1f}) > 5日線({ma5:.1f})，代表多頭超強。",
+                "✅ **操作指令**：只要收盤沒有跌破 5 日線，就死都別賣！",
+                "👀 **翻譯**：'沿5日線操作' = 只要K線還站在那條最陡的線上，就代表主力還在拉，讓他幫你賺錢。"
+            ]
+        elif price < ma5:
+            action = "減碼 / 觀望"
+            sop = [
+                f"⚠️ **警示**：股價跌破 5 日線({ma5:.1f})，短線轉弱。",
+                "✅ **操作指令**：如果是做短線，先賣出一半獲利了結。",
+                "👀 **翻譯**：'跌破5日線' = 火箭沒油了，可能會休息一陣子，先落袋為安。"
+            ]
+        else:
+            action = "盤整中"
+            sop = ["😴 均線糾結中，方向不明，建議空手觀望。"]
+
+    else:
+        strategy_name = "📦 KD 震盪策略 (Stochastic)"
+        strategy_desc = "這檔股票喜歡在一個箱子裡上下跑，適合低買高賣。"
+        
+        # KD SOP
+        if k_now < 40 and k_now > d_now:
+            action = "買進 (黃金交叉)"
+            sop = [
+                f"✅ **檢查位置**：K值({k_now:.1f}) 很低，代表大家都在賣，可能賣過頭了。",
+                "✅ **操作指令**：現在紅線往上穿過藍線，可以嘗試買進！",
+                "👀 **翻譯**：'低檔黃金交叉' = 跌深了準備反彈，這時候進場CP值很高。"
+            ]
+        elif k_now > 80:
+            action = "賣出 (高檔鈍化)"
+            sop = [
+                f"⚠️ **警示**：K值({k_now:.1f}) 太高了，代表過熱。",
+                "✅ **操作指令**：千萬別追高！手上有股票的可以考慮賣一點。",
+                "👀 **翻譯**：'高檔鈍化' = 派對太嗨了，警察隨時會來臨檢，先溜為妙。"
+            ]
+        else:
+            action = "觀望"
+            sop = ["😴 KD 在中間不上不下，沒有明確訊號，多看少做。"]
+
+    return strategy_name, strategy_desc, action, sop, ret_kd, ret_ma
 
 # ==========================================
 # 3. AI 核心
@@ -377,7 +385,7 @@ def ask_ai_todo_list(portfolio_status_str, model_to_use):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 戰情室 V15.0 (懶人軍師版)")
+st.title("📱 AI 戰情室 V16.0 (貼身家教版)")
 
 with st.sidebar:
     st.header("🚑 系統診斷室")
@@ -443,8 +451,8 @@ with tab1:
         power_score = calculate_score(curr_price, ma60_val, k_val, d_val, hist['Volume'].iloc[-1], vol_avg)
         badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60_val)
 
-        # 🟢 V15.0 核心：生成懶人總結
-        best_strat, strategy_comment, action_warning, ret_kd, ret_ma = get_smart_advice(hist)
+        # 🟢 V16.0 核心：取得家教建議
+        best_strat, strategy_comment, action_signal, action_sop, ret_kd, ret_ma = get_smart_advice_v16(hist)
 
         st.markdown(f"## {target_name} ({target_id})")
         
@@ -474,25 +482,33 @@ with tab1:
 
         st.divider()
 
-        # 🔥🔥🔥 V15.0 新增：AI 懶人總結區 🔥🔥🔥
-        st.markdown("### 🏆 AI 最終總結：這檔股票怎麼玩？")
+        # 🔥🔥🔥 V16.0：AI 貼身家教總結區 🔥🔥🔥
+        st.markdown("### 🎓 AI 貼身家教：手把手教你做")
         
-        # 用不同顏色框框顯示重點
         if "KD" in best_strat:
-            st.info(f"👉 **最佳策略：{best_strat}** (報酬率 {ret_kd:.1f}%)")
+            st.info(f"📌 **最佳戰術：{best_strat}** (歷史報酬 {ret_kd:.1f}%)")
         elif "均線" in best_strat:
-            st.success(f"👉 **最佳策略：{best_strat}** (報酬率 {ret_ma:.1f}%)")
+            st.success(f"📌 **最佳戰術：{best_strat}** (歷史報酬 {ret_ma:.1f}%)")
         else:
-            st.error(f"👉 **最佳策略：{best_strat}**")
+            st.error(f"📌 **最佳戰術：{best_strat}**")
             
-        st.write(f"📝 **股性分析**：{strategy_comment}")
-        st.markdown(f"### ⚡ **目前操作建議**：\n{action_warning}")
+        st.write(f"📝 **股性解說**：{strategy_comment}")
+        st.markdown(f"### ⚡ **目前訊號：{action_signal}**")
         
-        with st.expander("查看詳細回測數據 (給想看細節的人)"):
-            c1, c2 = st.columns(2)
-            c1.metric("KD 策略報酬", f"{ret_kd:.1f}%")
-            c2.metric("均線 策略報酬", f"{ret_ma:.1f}%")
-            st.caption("註：回測數據基於過去 2 年股價模擬")
+        # 🟢 手把手 SOP (重點升級！)
+        with st.container():
+            st.write("👇 **請依照以下步驟檢查 (SOP)：**")
+            for step in action_sop:
+                st.write(step)
+        
+        # 🟢 術語翻譯吐司 (新手友善)
+        with st.expander("📚 看不懂上面的術語？點我翻譯翻譯！"):
+            st.markdown("""
+            * **沿 5 日線操作**：這是「飆股」的特徵。意思是只要股價還在 5 日均線上面，就代表它還想漲，千萬不要賣；一跌破就代表累了，要馬上跑。
+            * **黃金交叉**：好像「紅燈變綠燈」，短期的線往上衝過長期的線，代表漲勢開始了。
+            * **高檔鈍化**：好像「車速破錶」，雖然很危險，但代表動力超強。這時候不要亂放空，但也別亂追高，坐好扶穩。
+            * **回測**：就是「穿越時空」，用過去的股價來考試。如果這套方法在過去能賺錢，未來賺錢的機率也比較高。
+            """)
 
         st.divider()
         
@@ -507,6 +523,15 @@ with tab1:
             else: st.error("AI 未連線")
 
         st.subheader("📈 技術分析")
+        
+        # 🟢 圖表教學
+        with st.expander("👀 這個圖表怎麼看？"):
+            st.markdown("""
+            1.  **K線 (紅綠棒)**：紅色代表當天漲，綠色代表跌。
+            2.  **橘色線 (季線)**：這是「生命線」。K棒在上面是好學生(多頭)，在下面是壞學生(空頭)。
+            3.  **紫色虛線 (Fibo)**：這是「地板」。股價跌到這裡通常會彈起來。
+            """)
+
         chart_type = st.radio("指標切換：", ["KD 指標", "MACD 指標", "布林通道"], horizontal=True)
         
         high_1y = hist['Close'].max()
@@ -554,9 +579,7 @@ with tab1:
         else: st.caption("無新聞")
     else: st.warning("查無資料")
 
-# --- Tab 2 & 3: 保持原樣 (省略以節省篇幅) ---
-# ... (請貼上之前 V12 或 V13 的 Tab 2 和 Tab 3 程式碼) ...
-# 注意：為了程式完整性，請務必補上 Tab 2 和 3 的程式碼！
+# --- Tab 2: 鑽石掃描 ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     if st.button("⚡ 開始掃描", type="primary"):
@@ -589,6 +612,7 @@ with tab2:
                     st.divider()
         else: st.info("無符合結果")
 
+# --- Tab 3: 我的資產 ---
 with tab3:
     with st.sidebar:
         st.header("📝 交易登記")
