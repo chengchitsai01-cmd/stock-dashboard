@@ -4,25 +4,25 @@ import os
 import yfinance as yf
 import requests
 import plotly.graph_objects as go
+import plotly.express as px # 新增: 用於畫熱力圖
 from plotly.subplots import make_subplots
 from datetime import datetime
 import time
 import random
 
 # ==========================================
-# 1. 設定與系統診斷 (AI 獵人系統)
+# 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 戰情室 V11.3 (寬螢幕修復版)", layout="wide")
+st.set_page_config(page_title="AI 戰情室 V12.0 (華爾街大師版)", layout="wide")
 
-# 🟢 獵人名單：我們會依序測試這些模型，直到找到活著的
+# 🟢 獵人名單
 CANDIDATE_MODELS = [
     'gemini-1.5-flash',
     'gemini-1.5-flash-latest',
     'gemini-1.5-flash-001',
     'gemini-1.5-flash-002',
-    'gemini-1.5-flash-8b',       # 新版省錢王
-    'gemini-2.0-flash-exp',      # 新版實驗
-    'gemini-2.5-flash',          # 你之前成功過的
+    'gemini-1.5-flash-8b',
+    'gemini-2.0-flash-exp',
     'gemini-1.5-pro',
     'gemini-pro'
 ]
@@ -43,7 +43,6 @@ def init_key():
 
 API_KEY = init_key()
 
-# 測試連線函數
 def test_connection(api_key, model_name):
     if not api_key: return False, "無 Key"
     headers = {'Content-Type': 'application/json'}
@@ -51,7 +50,6 @@ def test_connection(api_key, model_name):
     data = {"contents": [{"parts": [{"text": "Hi"}]}]}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
     try:
-        # 設定短超時，快速掃描
         response = requests.post(url, headers=headers, params=params, json=data, timeout=3)
         if response.status_code == 200: return True, "OK"
         elif response.status_code == 429: return False, "額度滿 (429)"
@@ -60,22 +58,16 @@ def test_connection(api_key, model_name):
     except Exception as e:
         return False, str(e)
 
-# 自動獵人：找出唯一可用的模型
 @st.cache_resource(show_spinner=False)
 def hunt_for_working_model(api_key):
     if not api_key: return None, "無 Key"
     logs = []
-    
-    # 這裡我們做一個特殊的 "並行測試" 概念，但為了簡單，我們先依序測
     for model in CANDIDATE_MODELS:
         success, msg = test_connection(api_key, model)
-        if success:
-            return model, f"✅ 獵人已鎖定: {model}"
+        if success: return model, f"✅ 自動鎖定: {model}"
         logs.append(f"{model}: {msg}")
-            
-    return None, "😭 全軍覆沒。請看日誌：\n" + "\n".join(logs)
+    return None, "\n".join(logs)
 
-# 啟動獵人
 AUTO_MODEL = None
 HUNT_LOG = ""
 if API_KEY:
@@ -212,7 +204,7 @@ def evaluate_stock(info, price, ma60):
     return badges, is_diamond, status_text, eps, yield_val, roe
 
 # ==========================================
-# 3. AI 核心 (含代班 AI)
+# 3. AI 核心
 # ==========================================
 def mock_ai_analysis(ticker, name, price, ma60, k, d):
     trend = "多頭" if price > ma60 else "空頭"
@@ -274,12 +266,11 @@ def ask_ai_todo_list(portfolio_status_str, model_to_use):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 戰情室 V11.3 (寬螢幕修復版)")
+st.title("📱 AI 戰情室 V12.0 (華爾街大師版)")
 
 with st.sidebar:
     st.header("🚑 系統診斷室")
     FINAL_MODEL = AUTO_MODEL
-    
     use_manual = st.checkbox("手動指定模型")
     if use_manual:
         manual_model = st.text_input("輸入模型名稱", "gemini-1.5-flash-8b")
@@ -292,7 +283,25 @@ with st.sidebar:
         st.warning("⚠️ 啟用代班 AI 模式")
         AI_READY = False
         with st.expander("查看日誌"): st.text(HUNT_LOG)
+    
     st.divider()
+    
+    # 🦁 V12.0 新增：資金控管計算器 (Position Sizing)
+    st.header("🦁 資金控管 (風險計算)")
+    with st.expander("開啟計算器", expanded=False):
+        capital = st.number_input("總資金 (元)", value=1000000)
+        risk_per_trade = st.slider("單筆風險 (%)", 1.0, 5.0, 2.0)
+        entry_price = st.number_input("進場價", value=100.0)
+        stop_loss = st.number_input("停損價", value=90.0)
+        
+        if entry_price > stop_loss:
+            risk_amount = capital * (risk_per_trade / 100)
+            loss_per_share = entry_price - stop_loss
+            shares_to_buy = int(risk_amount / loss_per_share)
+            st.markdown(f"### 建議買入：**{shares_to_buy}** 股")
+            st.caption(f"最多虧損：${risk_amount:,.0f} (本金的 {risk_per_trade}%)")
+        else:
+            st.error("停損價必須低於進場價")
 
 tab1, tab2, tab3 = st.tabs(["🔍 個股行情", "📡 鑽石掃描", "📊 我的資產"])
 
@@ -326,7 +335,6 @@ with tab1:
 
         st.markdown(f"## {target_name} ({target_id})")
         
-        # 🟢 V11.3 修復：將數據拆成兩排，每排 2 個，解決 "..." 問題
         def safe_get(dic, key, fmt="{:.2f}"):
             val = dic.get(key)
             if val is None: return "N/A"
@@ -340,19 +348,13 @@ with tab1:
         else: m_cap_str = "N/A"
 
         with st.container():
-            # 第一排 (2欄)
             c1, c2 = st.columns(2)
             c1.metric("現價", f"{curr_price:.1f}", f"{change:.1f}")
             c2.metric("開盤", safe_get(info, 'open'))
-            
-            # 第二排 (2欄)
             c3, c4 = st.columns(2)
             c3.metric("最高 / 最低", f"{safe_get(info, 'dayHigh')} / {safe_get(info, 'dayLow')}")
             c4.metric("52週波段", f"{safe_get(info, 'fiftyTwoWeekLow')} - {safe_get(info, 'fiftyTwoWeekHigh')}")
-            
             st.divider()
-            
-            # 第三排 (4欄，這些數字比較短，可以放一起)
             d1, d2, d3, d4 = st.columns(4)
             d1.metric("P/E", safe_get(info, 'trailingPE'))
             d2.metric("P/B", safe_get(info, 'priceToBook'))
@@ -361,7 +363,6 @@ with tab1:
 
         st.divider()
 
-        # 儀表板 & 六宮格
         col_L, col_R = st.columns([1, 1])
         with col_L:
             fig_gauge = go.Figure(go.Indicator(
@@ -394,13 +395,11 @@ with tab1:
 
             if yield_val > 0.05: g5.metric("股息", "高息", f"{yield_val*100:.1f}%")
             else: g5.metric("股息", "一般", f"{yield_val*100:.1f}%", delta_color="off")
-            
             if change > 0: g6.metric("動能", "強", f"{change:.1f}")
             else: g6.metric("動能", "弱", f"{change:.1f}", delta_color="inverse")
 
         st.divider()
         
-        # AI 按鈕
         if st.button(f"🤖 呼叫 AI 分析 {target_name}"):
             tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
             info_text = f"EPS{eps}, ROE{roe}, 殖利率{yield_val}。"
@@ -408,13 +407,24 @@ with tab1:
                 ai_comment = ask_ai_single(target_id, target_name, info_text, tech_text, FINAL_MODEL, curr_price, ma60_val, k_val, d_val)
                 st.info(f"💡 **AI 觀點**：\n\n{ai_comment}")
 
-        # 技術分析圖表
-        st.subheader("📈 技術分析")
+        st.subheader("📈 技術分析 (含斐波那契)")
         chart_type = st.radio("指標切換：", ["KD 指標", "MACD 指標", "布林通道"], horizontal=True)
         
+        # V12.0 新增：斐波那契回撤 (自動計算一年內最高最低)
+        high_1y = hist['Close'].max()
+        low_1y = hist['Close'].min()
+        diff = high_1y - low_1y
+        fibo_0382 = high_1y - (diff * 0.382)
+        fibo_0500 = high_1y - (diff * 0.5)
+        fibo_0618 = high_1y - (diff * 0.618)
+
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.6, 0.2, 0.2])
         fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='K線'), row=1, col=1)
         
+        # 畫 Fibo 線
+        fig.add_hline(y=fibo_0382, line_dash="dot", line_color="purple", annotation_text="Fibo 0.382", row=1, col=1)
+        fig.add_hline(y=fibo_0618, line_dash="dot", line_color="purple", annotation_text="Fibo 0.618", row=1, col=1)
+
         if chart_type == "布林通道":
             fig.add_trace(go.Scatter(x=hist.index, y=hist['BB_Up'], mode='lines', name='上軌', line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
             fig.add_trace(go.Scatter(x=hist.index, y=hist['BB_Low'], mode='lines', name='下軌', line=dict(color='gray', width=1, dash='dot')), row=1, col=1)
@@ -508,16 +518,26 @@ with tab3:
             holdings.insert(1, "名稱", holdings["代號"].apply(get_stock_name))
             holdings["現價"] = holdings["代號"].apply(get_stock_price)
             holdings["市值"] = holdings["現價"] * holdings["股數"]
+            holdings["損益"] = holdings["市值"] - (holdings["成本"] * holdings["股數"])
+            holdings["報酬率"] = (holdings["損益"] / (holdings["成本"] * holdings["股數"])) * 100
+            
             total = holdings["市值"].sum()
             profit = total - (holdings["成本"]*holdings["股數"]).sum()
             c1, c2 = st.columns(2)
             c1.metric("總資產", f"${total:,.0f}")
             c2.metric("總損益", f"${profit:,.0f}")
-            st.dataframe(holdings[["日期", "名稱", "代號", "股數", "成本", "現價", "市值"]], use_container_width=True)
+            
+            # V12.0 新增：熱力圖
+            st.subheader("🗺️ 庫存熱力圖")
+            fig_map = px.treemap(holdings, path=['名稱'], values='市值', color='報酬率',
+                                 color_continuous_scale='RdBu_r', color_continuous_midpoint=0)
+            st.plotly_chart(fig_map, use_container_width=True)
+
+            st.dataframe(holdings[["日期", "名稱", "代號", "股數", "成本", "現價", "市值", "報酬率"]], use_container_width=True)
             st.divider()
+            
             st.subheader("📅 今日 AI 操盤待辦")
             if st.button("🚀 生成今日操作清單", type="primary"):
-                # 不管有沒有 AI，這裡都能跑
                 with st.spinner(f"分析中..."):
                     portfolio_status = ""
                     for idx, row in holdings.iterrows():
@@ -533,7 +553,6 @@ with tab3:
                             status = f"- {t_name}: 成本{cost}, 現價{current_p:.1f}, 季線{ma60:.1f}, KD值{k_now:.1f}\n"
                             portfolio_status += status
                     
-                    # 嘗試真 AI，失敗用假 AI
                     todo_list = ask_ai_todo_list(portfolio_status, FINAL_MODEL)
                     st.success(todo_list)
         else: st.info("尚無庫存")
