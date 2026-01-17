@@ -13,7 +13,7 @@ import random
 # ==========================================
 # 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 戰情室 V18.0 (訊號獵人版)", layout="wide")
+st.set_page_config(page_title="AI 戰情室 V19.0 (獵人手冊版)", layout="wide")
 
 # 🟢 獵人名單
 CANDIDATE_MODELS = [
@@ -184,7 +184,7 @@ def calculate_indicators(df):
     df['BB_Up'] = df['BB_Mid'] + (df['BB_Std'] * 2)
     df['BB_Low'] = df['BB_Mid'] - (df['BB_Std'] * 2)
     
-    # MACD (for chart)
+    # MACD
     exp12 = df['Close'].ewm(span=12, adjust=False).mean()
     exp26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp12 - exp26
@@ -203,40 +203,31 @@ def calculate_score(price, ma60, k, d, vol, vol_avg):
     if vol > vol_avg: score += 5
     return max(0, min(100, score))
 
-# 🟢 V18.0 新增：進階訊號判讀
 def analyze_technical_signals(df):
     signals = []
-    
-    # 取最後一筆資料
     curr = df.iloc[-1]
-    # 取前一筆資料 (用來判斷交叉)
     prev = df.iloc[-2]
     
-    # 1. 強勢排列 (5 > 20 > 60)
+    # 1. 強勢排列
     if curr['MA5'] > curr['MA20'] and curr['MA20'] > curr['MA60_Line']:
-        signals.append("🚀 強勢排列 (飆股體質)")
-        
-    # 2. 爆量長紅 (成交量 > 5日均量 1.5倍 且 上漲)
+        signals.append("🚀 強勢排列")
+    # 2. 爆量長紅
     if curr['Volume'] > curr['Vol_MA5'] * 1.5 and curr['Close'] > curr['Open']:
-        signals.append("💥 爆量長紅 (主力進場)")
-        
-    # 3. KD 黃金交叉 (低檔)
+        signals.append("💥 爆量長紅")
+    # 3. KD起漲
     if prev['K'] < prev['D'] and curr['K'] > curr['D'] and curr['K'] < 50:
-        signals.append("✨ KD起漲 (波段買點)")
-        
-    # 4. 布林超跌 (跌破下軌)
+        signals.append("✨ KD起漲")
+    # 4. 布林超跌
     if curr['Close'] < curr['BB_Low']:
-        signals.append("💎 布林超跌 (搶反彈)")
-        
-    # 5. 均線糾結 (變盤前兆)
+        signals.append("💎 布林超跌")
+    # 5. 均線糾結
     gap = (max(curr['MA5'], curr['MA20'], curr['MA60_Line']) - min(curr['MA5'], curr['MA20'], curr['MA60_Line'])) / curr['Close']
-    if gap < 0.02: # 2% 以內
-        signals.append("🌀 均線糾結 (即將變盤)")
+    if gap < 0.02:
+        signals.append("🌀 均線糾結")
 
     return signals
 
 def evaluate_stock_basic(info, price, ma60):
-    # 保留原本的基本面檢查
     score = 0
     badges = []
     eps = info.get('trailingEps', 0)
@@ -447,7 +438,7 @@ def ask_ai_todo_list(portfolio_status_str, model_to_use):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 戰情室 V18.0 (訊號獵人版)")
+st.title("📱 AI 戰情室 V19.0 (獵人手冊版)")
 
 with st.sidebar:
     st.header("🚑 系統診斷室")
@@ -510,7 +501,8 @@ with tab1:
         d_val = hist['D'].iloc[-1]
         
         power_score = calculate_score(curr_price, ma60_val, k_val, d_val, hist['Volume'].iloc[-1], vol_avg)
-        badges, is_diamond, tech_status = evaluate_stock_basic(info, curr_price, ma60_val)
+        badges, is_diamond, tech_status, eps, yield_val, roe = evaluate_stock(info, curr_price, ma60_val)
+        
         best_strat, strategy_comment, action_signal, action_sop, ret_kd, ret_ma = get_smart_advice_v16(hist)
 
         st.markdown(f"## {target_name} ({target_id})")
@@ -563,9 +555,8 @@ with tab1:
         
         if st.button(f"🤖 呼叫 AI 深度分析 {target_name}"):
             if AI_READY:
-                # 簡化 prompt 節省 token
                 tech_text = f"現價{curr_price}, 季線{ma60_val:.1f}。K值{k_val:.1f}, D值{d_val:.1f}。"
-                info_text = "基本面正常" # 簡化
+                info_text = f"EPS{eps}, ROE{roe}, 殖利率{yield_val}。"
                 with st.spinner(f"AI ({FINAL_MODEL}) 分析中..."):
                     ai_comment = ask_ai_single(target_id, target_name, info_text, tech_text, FINAL_MODEL, curr_price, ma60_val, k_val, d_val)
                     st.info(f"💡 **AI 觀點**：\n\n{ai_comment}")
@@ -626,10 +617,20 @@ with tab1:
         else: st.caption("無新聞")
     else: st.warning("查無資料")
 
-# --- Tab 2: 鑽石掃描 (V18.0 升級) ---
+# --- Tab 2: 鑽石掃描 (V19.0 新增翻譯機) ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     
+    # 🟢 V19.0 新增：獵人暗號翻譯機
+    with st.expander("📚 獵人暗號翻譯機 (看不懂點我)"):
+        st.markdown("""
+        * **🚀 強勢排列**：像扇子一樣打開，代表大家都在賺錢，趨勢超強。
+        * **💥 爆量長紅**：突然很多人衝進來買，主力表態了，行情可能剛開始。
+        * **✨ KD起漲**：跌深了開始反彈，適合撿便宜。
+        * **💎 布林超跌**：跌過頭了，乖離過大，隨時會像橡皮筋一樣彈回來。
+        * **🌀 均線糾結**：股價在休息，正在集氣，準備噴出或跳水（變盤）。
+        """)
+
     sector_options = list(SECTOR_MAP.keys()) + ["我的自選 (Watchlist)"]
     selected_sector = st.selectbox("請選擇掃描範圍：", sector_options)
     
@@ -648,20 +649,16 @@ with tab2:
         with st.spinner(f"正在掃描 {selected_sector} (含訊號判讀)..."):
             progress_bar = st.progress(0)
             for i, t in enumerate(scan_list):
-                # 掃描需要至少 60 天以上的數據來算 MA60
                 info, hist, _ = get_stock_detail(t, period="1y") 
                 if info and not hist.empty and len(hist) > 60:
                     hist = calculate_indicators(hist)
                     p = hist.iloc[-1]['Close']
                     m = hist['Close'].rolling(window=60).mean().iloc[-1]
                     
-                    # 🟢 V18.0 核心：判讀 4 大訊號
                     signals = analyze_technical_signals(hist)
                     badges, is_dia, status = evaluate_stock_basic(info, p, m)
-                    
                     name = get_stock_name(t)
                     
-                    # 只要有訊號 (Signal) 或 是鑽石/便宜 (Status) 就顯示
                     if is_dia or (m > p) or len(signals) > 0:
                         signal_str = " ".join(signals) if signals else "無特殊訊號"
                         report.append({
@@ -683,18 +680,13 @@ with tab2:
                     c1, c2, c3 = st.columns([1.5, 2, 2])
                     title = f"💎 {row['名稱']} ({row['代號']})" if "鑽石" in str(row['亮點']) else f"{row['名稱']} ({row['代號']})"
                     c1.markdown(f"### {title}")
-                    
-                    # 顯示 AI 訊號標籤
-                    if row['AI訊號'] != "無特殊訊號":
-                        c2.success(row['AI訊號'])
-                    else:
-                        c2.caption("觀察中")
-                        
+                    if row['AI訊號'] != "無特殊訊號": c2.success(row['AI訊號'])
+                    else: c2.caption("觀察中")
                     c3.write(f"{row['狀態']} {row['基本面']}")
                     st.divider()
         else: st.info("該板塊目前靜悄悄，沒有發現獵物。")
 
-# --- Tab 3: 我的資產 (同上版) ---
+# --- Tab 3: 我的資產 ---
 with tab3:
     with st.sidebar:
         st.header("📝 交易登記")
