@@ -13,7 +13,7 @@ import random
 # ==========================================
 # 1. 設定與系統診斷
 # ==========================================
-st.set_page_config(page_title="AI 戰情室 V19.0 (獵人手冊版)", layout="wide")
+st.set_page_config(page_title="AI 戰情室 V19.1 (修復版)", layout="wide")
 
 # 🟢 獵人名單
 CANDIDATE_MODELS = [
@@ -227,6 +227,7 @@ def analyze_technical_signals(df):
 
     return signals
 
+# 🟢 修正：這是給 Tab 2 掃描用的 (精簡版，只回傳3個值)
 def evaluate_stock_basic(info, price, ma60):
     score = 0
     badges = []
@@ -247,6 +248,36 @@ def evaluate_stock_basic(info, price, ma60):
     else: status_text = f"🔴 昂貴"
     
     return badges, is_diamond, status_text
+
+# 🟢 修正：這是給 Tab 1 詳細分析用的 (完整版，回傳6個值)
+def evaluate_stock(info, price, ma60):
+    badges = []
+    score = 0
+    eps = info.get('trailingEps', 0)
+    if eps is None: eps = 0
+    if eps > 1:
+        badges.append("💰EPS優")
+        score += 1
+
+    yield_val = info.get('dividendYield', 0)
+    if yield_val is None: yield_val = 0
+    if yield_val > 0.05:
+        badges.append("🥥高股息")
+        score += 1
+
+    roe = info.get('returnOnEquity', 0)
+    if roe is None: roe = 0
+    if roe > 0.15:
+        badges.append("🚀高ROE")
+        score += 1
+    
+    is_diamond = (score >= 2)
+    gap = (ma60 - price) / ma60 * 100
+    status_text = ""
+    if gap > 0: status_text = f"🟢 便宜 (低於季線 {gap:.1f}%)"
+    else: status_text = f"🔴 昂貴 (高於季線 {abs(gap):.1f}%)"
+
+    return badges, is_diamond, status_text, eps, yield_val, roe
 
 def get_beginner_advice(price, ma60, k, d):
     advice = {
@@ -438,7 +469,7 @@ def ask_ai_todo_list(portfolio_status_str, model_to_use):
 # ==========================================
 # 4. 主程式介面
 # ==========================================
-st.title("📱 AI 戰情室 V19.0 (獵人手冊版)")
+st.title("📱 AI 戰情室 V19.1 (修復版)")
 
 with st.sidebar:
     st.header("🚑 系統診斷室")
@@ -617,11 +648,10 @@ with tab1:
         else: st.caption("無新聞")
     else: st.warning("查無資料")
 
-# --- Tab 2: 鑽石掃描 (V19.0 新增翻譯機) ---
+# --- Tab 2: 鑽石掃描 ---
 with tab2:
     st.subheader("🧐 全市場鑽石獵人")
     
-    # 🟢 V19.0 新增：獵人暗號翻譯機
     with st.expander("📚 獵人暗號翻譯機 (看不懂點我)"):
         st.markdown("""
         * **🚀 強勢排列**：像扇子一樣打開，代表大家都在賺錢，趨勢超強。
